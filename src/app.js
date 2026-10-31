@@ -41,7 +41,12 @@ function sheet(title, options) {
     const close = (v) => { bg.remove(); resolve(v); };
     bg.addEventListener("click", (e) => {
       const b = e.target.closest("button");
-      if (b) close(b.dataset.i === "-1" ? null : options[+b.dataset.i].value);
+      if (b) {
+        const o = b.dataset.i === "-1" ? null : options[+b.dataset.i];
+        // iPhone 只允許在「點擊當下」打開相機，所以要在這裡同步執行，不能等 Promise 之後
+        if (o && o.sync) o.sync();
+        close(o ? o.value : null);
+      }
       else if (e.target === bg) close(null);
     });
     document.body.appendChild(bg);
@@ -53,7 +58,7 @@ function pickFiles({ capture = false, multiple = false } = {}) {
     const inp = document.createElement("input");
     inp.type = "file";
     inp.accept = "image/*";
-    if (capture) inp.capture = "environment";
+    if (capture) inp.setAttribute("capture", "environment");
     if (multiple) inp.multiple = true;
     inp.style.display = "none";
     inp.onchange = () => { resolve([...inp.files]); inp.remove(); };
@@ -406,7 +411,7 @@ async function renderReview() {
     } else if (!confirm("放棄這張名片？")) return;
     finishBatchOrExit(true);
   });
-  $app.querySelector("#save").addEventListener("click", saveDraft);
+  $app.querySelector("#save").addEventListener("click", onSaveClick);
   $app.querySelector("#undoTpl")?.addEventListener("click", () => {
     d.card = d.template.before.card;
     d.others = d.template.before.others;
@@ -475,14 +480,14 @@ async function renderReview() {
   });
 }
 
-async function saveDraft() {
+async function saveDraft({ navigate = true } = {}) {
   const d = state.draft;
   const form = $app.querySelector("#reviewForm");
   readForm(form, d.card);
   const c = cleanCard(d.card);
   if (!c.name && !c.nameEn && !c.company && !c.phones.length && !d.front) {
     toast("至少填一個欄位，或拍一張照片");
-    return;
+    return null;
   }
   const card = { id: db.uid(), ...c, source: d.source, ocrText: [...d.lines, ...d.backLines].map((l) => l.text).join("\n") };
   if (d.front) {
@@ -504,8 +509,30 @@ async function saveDraft() {
   } else {
     toast("已存檔");
     state.draft = null;
-    go("#/card/" + card.id);
+    if (navigate) go("#/card/" + card.id);
   }
+  return card;
+}
+
+// 按「存檔」：單張模式先問「存檔／存檔並拍下一張」；批次模式直接存並跳下一張
+async function onSaveClick() {
+  const d = state.draft;
+  if (state.batch) return saveDraft();
+  const fromAlbum = d.source === "album";
+  let nextFiles = null;
+  const v = await sheet(null, [
+    { label: "存檔", value: "save" },
+    { label: fromAlbum ? "🖼️ 存檔並從相簿選下一張" : "📷 存檔並拍下一張", value: "next",
+      sync: () => { nextFiles = pickFiles({ capture: !fromAlbum }); } },
+  ]);
+  if (!v) return;
+  const card = await saveDraft({ navigate: false });
+  if (!card) return; // 欄位都空白、沒存成功
+  // 先切到剛存好的名片；如果沒拍下一張（按了取消），就停在這裡
+  go("#/card/" + card.id);
+  if (v !== "next" || !nextFiles) return;
+  const files = await nextFiles;
+  if (files.length) startDraftFromFile(files[0], fromAlbum ? "album" : "camera");
 }
 
 function nextInBatch() {
