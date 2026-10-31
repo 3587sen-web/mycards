@@ -39,7 +39,7 @@ const URL_RE = /((https?:\/\/)?(www\.)[^\s，、]+|https?:\/\/[^\s，、]+|\b[A-
 const TAXID_RE = /(統一編號|統編|統一編號|VAT|Tax\s*ID|公司統編)\s*[:：]?\s*(\d{8})/i;
 
 // 電話：標籤 + 號碼。號碼允許 + ( ) - 空白 # 分機
-const PHONE_CHUNK = /(\+?\(?\d[\d\s\-()#.]{6,}\d)(\s*(ext\.?|分機|轉|#|x)\s*\d{1,6})?/gi;
+const PHONE_CHUNK = /(\(?\+?\(?\d[\d\s\-()#.]{6,}\d)(\s*(ext\.?|分機|轉|#|x)\s*\d{1,6})?/gi;
 const LABELS = [
   { type: "mobile", re: /(手機|行動|行動電話|Mobile|Mob|Cell|M)\s*[:：.]?\s*$/i },
   { type: "fax", re: /(傳真|FAX|F)\s*[:：.]?\s*$/i },
@@ -59,7 +59,7 @@ function cleanPhone(raw) {
 
 function guessPhoneType(num) {
   const digits = num.replace(/\D/g, "");
-  if (/^09\d{8}$/.test(digits) || /^8869\d{8}$/.test(digits)) return "mobile";
+  if (/^09\d{8}$/.test(digits) || /^8869\d{8}$/.test(digits) || /^(86)?1[3-9]\d{9}$/.test(digits)) return "mobile";
   return "work";
 }
 
@@ -72,6 +72,8 @@ export function extractPhones(text) {
     const num = m[1];
     const digits = num.replace(/\D/g, "");
     if (digits.length < 7 || digits.length > 15) continue;
+    // 000 開頭（會員編號、ID 之類）→ 不是電話
+    if (/^000/.test(digits)) continue;
     // 8 位數字且前面有統編字樣 → 不是電話
     const before = text.slice(0, m.index);
     if (/(統一編號|統編|VAT|Tax)\s*[:：]?\s*$/i.test(before)) continue;
@@ -89,7 +91,7 @@ export function extractPhones(text) {
 }
 
 function normalizeLine(l) {
-  const text = (l.text || "").replace(/\s+/g, " ").trim();
+  const text = (l.text || "").normalize("NFKC").replace(/\s+/g, " ").trim();
   const box = l.box || { x: 0, y: 0, w: 0, h: 0 };
   return { text, box, score: l.score ?? 1, used: false };
 }
@@ -112,6 +114,21 @@ function isLikelyName(t) {
 
 function isLikelyEnglishName(t) {
   return /^[A-Z][a-zA-Z'-]+(\s+[A-Z][a-zA-Z'.-]+){1,3}$/.test(t) && !COMPANY_EN.test(t) && !TITLE_EN.test(t) && !ADDR_EN.test(t);
+}
+
+function isEnglishNameShape(t) {
+  if (/[\u3400-\u9fff\d@]/.test(t)) return false;
+  const words = t.replace(/[|丨]/g, " ").split(/[\s,]+/).filter(Boolean);
+  if (words.length < 1 || words.length > 4) return false;
+  if (!words.every((w) => /^[A-Za-z][A-Za-z'.-]*$/.test(w))) return false;
+  if (TITLE_EN.test(t) || ADDR_EN.test(t) || DEPT_EN.test(t)) return false;
+  if (COMPANY_EN.test(t) && words.length >= 2) return false;
+  return /^[A-Z]/.test(words[0]);
+}
+
+// 判斷 Logo 時用：第一個字是常見姓氏，而且是 2~3 個字（像人名）
+function hasSurnameStrict(t) {
+  return hasSurname(t) && t.length <= 3;
 }
 
 function findTitle(t) {
@@ -169,12 +186,32 @@ export function parseCard(rawLines) {
     }
   }
 
+  // ---- 1.5 中英混排拆開：「黃韻潔 Wendy Huang」「Brian Chen陳子龍」「匯智…公司WiSECURE Technologies Inc.」 ----
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.used || !CJK.test(l.text) || !/[A-Za-z]{2,}/.test(l.text) || ADDR_RE.test(l.text) || l.text.includes("@")) continue;
+    const segs = l.text.split(/(?<=[\u3400-\u9fff)）])\s*(?=[A-Za-z])|(?<=[A-Za-z.])\s*(?=[\u3400-\u9fff(（])/)
+      .map((x) => x.replace(/^[\s|丨I]+(?=[\u3400-\u9fff])|(?<=\.)\s*[|丨I]$|[\s|丨]+$/g, "").trim())
+      .filter(Boolean);
+    if (segs.length < 2) continue;
+    let offset = 0;
+    const subs = segs.map((t) => {
+      const start = l.text.indexOf(t, offset);
+      offset = start + t.length;
+      const ratio = l.text.length ? Math.max(0, start) / l.text.length : 0;
+      return { ...l, text: t, box: { ...l.box, x: l.box.x + l.box.w * ratio, w: l.box.w * (t.length / l.text.length) }, split: true };
+    });
+    lines.splice(i, 1, ...subs);
+    i += subs.length - 1;
+  }
+
   // ---- 2. 關鍵字 ----
   for (const l of lines) {
     if (l.used) continue;
     const t = l.text;
     if (LABEL_STRIP.test(t) || (ADDR_RE.test(t) && CJK.test(t) && t.length >= 6) || (ADDR_EN.test(t) && /\d/.test(t) && t.length >= 12)) {
-      const v = t.replace(LABEL_STRIP, "").trim();
+      const v = t.replace(LABEL_STRIP, "").replace(/^[〒亍丅]\s*(?=\d)/, "").trim();
+      l.role = "address";
       if (!card.address) card.address = v;
       else if (CJK.test(v) && !CJK.test(card.address)) card.address = v; // 優先中文地址
       l.used = true;
@@ -187,7 +224,7 @@ export function parseCard(rawLines) {
     if (CJK.test(t) && t.length >= 4 && (COMPANY_END.test(t) || (COMPANY_RE.test(t) && !findTitle(t)))) {
       if (!card.company) card.company = t;
       l.used = true;
-    } else if (!CJK.test(t) && COMPANY_EN.test(t) && t.length >= 4) {
+    } else if (!CJK.test(t) && COMPANY_EN.test(t) && t.trim().split(/\s+/).length >= 2) {
       if (!card.companyEn) card.companyEn = t;
       l.used = true;
     }
@@ -213,7 +250,9 @@ export function parseCard(rawLines) {
         const w = titleOf(p);
         // 「林祺祥副理」：職稱前面黏著姓名
         const before = p.slice(0, p.indexOf(w));
-        if (before && isLikelyName(before) && hasSurname(before) && !card.name) {
+        const nameOk = before && isLikelyName(before) && hasSurname(before) &&
+          (before.length <= 3 || COMPOUND_SURNAMES.some((c) => before.startsWith(c)));
+        if (nameOk && !card.name) {
           card.name = before;
           card.title = card.title ? card.title + " " + p.slice(before.length) : p.slice(before.length);
         } else {
@@ -229,7 +268,8 @@ export function parseCard(rawLines) {
     if (claimed) {
       // 同一行剩下的部分：像姓名的當姓名，其餘放回「其他文字」
       for (const p of rest) {
-        if (!card.name && isLikelyName(p) && hasSurname(p)) card.name = p;
+        if (!card.name && isLikelyName(p) && hasSurname(p) && p.length <= 3) card.name = p;
+        else if (CJK.test(p) && !/\d/.test(p) && p.length <= 8) card.title = p + " " + card.title; // 「品牌行銷 總監」
         else l.leftover = (l.leftover ? l.leftover + " " : "") + p;
       }
       l.role = "title";
@@ -297,19 +337,61 @@ export function parseCard(rawLines) {
   }
 
   // 郵遞區號（3~6 位數字單獨一行）→ 加到地址前面
+  const addrLine = lines.find((l) => l.role === "address");
   for (const l of lines) {
-    if (!l.used && /^\d{3,6}$/.test(l.text) && card.address && !/^\d/.test(card.address)) {
+    const near = addrLine && Math.abs(l.box.x - addrLine.box.x) < addrLine.box.h * 1.5 && l.box.y <= addrLine.box.y + 2 && addrLine.box.y - l.box.y < addrLine.box.h * 2.2;
+    if (!l.used && near && /^\d{3,6}$/.test(l.text) && card.address && !/^\d/.test(card.address)) {
       card.address = l.text + card.address;
       l.used = true;
     }
   }
 
-  const enCandidates = lines.filter((l) => !l.used && isLikelyEnglishName(l.text));
-  if (enCandidates.length) {
-    enCandidates.sort((a, b) => b.box.h - a.box.h);
-    card.nameEn = enCandidates[0].text;
-    enCandidates[0].used = true;
+  // ---- 英文姓名：緊鄰中文姓名的英文字最可能是英文名（Rosanna、Wendy Huang、TANG, YaoChung Joseph） ----
+  {
+    const nameL = lines.find((l) => l.role === "name") || lines.find((l) => card.name && l.text.includes(card.name));
+    const maxH = Math.max(1, ...lines.map((l) => l.box.h));
+    const scored = lines
+      .filter((l) => !l.used && isEnglishNameShape(l.text))
+      .map((l) => {
+        const t = l.text;
+        let score = l.box.h / maxH;
+        if (/^[A-Z][a-z]/.test(t) || /[a-z]/.test(t)) score += 1; // 有小寫字母，不是全大寫的品牌字
+        if (/^[A-Z]+$/.test(t)) score -= 2; // 單一全大寫字（TONSUN、FIPS）多半是 Logo
+        if (/,/.test(t) && /^[A-Z]+,/.test(t)) score += 1.5; // 「TANG, YaoChung」姓氏在前的寫法
+        if (nameL) {
+          const sameRow = Math.abs(l.box.y - nameL.box.y) < Math.max(l.box.h, nameL.box.h) * 0.8;
+          const vgap = Math.min(Math.abs(l.box.y - (nameL.box.y + nameL.box.h)), Math.abs(nameL.box.y - (l.box.y + l.box.h)));
+          const stacked = vgap < nameL.box.h * 1.2 && Math.abs(l.box.x - nameL.box.x) < nameL.box.w + l.box.h;
+          if (sameRow || stacked) score += 3;
+        }
+        return { l, t, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    if (scored.length && scored[0].score >= 2.5) {
+      card.nameEn = scored[0].t.replace(/\s*[|丨]\s*/g, " ").replace(/\s+/g, " ").trim();
+      scored[0].l.used = true;
+    }
   }
+  // 沒有中文姓名、只有英文姓名的名片：英文名放進姓名欄
+  if (!card.name && card.nameEn) { card.name = card.nameEn; card.nameEn = ""; }
+
+  // ---- 公司名稱沒寫出來時：大字 Logo（例如上下兩行「東昇」「空調」）當公司名稱 ----
+  if (!card.company) {
+    const nameH = (lines.find((l) => l.role === "name") || { box: { h: 0 } }).box.h;
+    const logo = lines.filter((l) => !l.used && CJK_ALL.test(l.text) && l.text.length >= 2 && l.text.length <= 8 && l.box.h >= nameH * 0.9 && !hasSurnameStrict(l.text));
+    if (logo.length) {
+      logo.sort((a, b) => a.box.y - b.box.y);
+      const groups = [];
+      for (const l of logo) {
+        const g = groups.find((g) => { const last = g[g.length - 1]; return Math.abs(last.box.x - l.box.x) < l.box.h && l.box.y - (last.box.y + last.box.h) < l.box.h * 0.6; });
+        if (g) g.push(l); else groups.push([l]);
+      }
+      groups.sort((a, b) => Math.max(...b.map((l) => l.box.h)) - Math.max(...a.map((l) => l.box.h)));
+      card.company = groups[0].map((l) => l.text).join("");
+      groups[0].forEach((l) => { l.used = true; });
+    }
+  }
+
   // 公司名稱沒找到時，用英文公司名
   if (!card.company && card.companyEn) {
     card.company = card.companyEn;

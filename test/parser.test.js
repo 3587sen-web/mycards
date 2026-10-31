@@ -130,3 +130,61 @@ test("分隔符號切開職稱與部門", () => {
   assert.equal(card.title, "創意總監");
   assert.equal(card.department, "品牌部");
 });
+
+// ---- 第二批：英文名字與中英混排（虛構資料） ----
+test("中英混排同一行：中文姓名＋英文姓名", () => {
+  const { card } = parseCard([
+    B("行銷顧問 Marketing Advisor", 100, 538, 51),
+    B("王雅琪 Grace Wang", 96, 601, 69),
+    B("宇光科技股份有限公司Yuguang Technologies Inc.", 104, 721, 38),
+  ]);
+  assert.equal(card.name, "王雅琪");
+  assert.equal(card.nameEn, "Grace Wang");
+  assert.equal(card.title, "行銷顧問");
+  assert.equal(card.company, "宇光科技股份有限公司");
+  assert.equal(card.companyEn, "Yuguang Technologies Inc.");
+});
+
+test("英文在前、中文在後黏在一起", () => {
+  const { card } = parseCard([B("Founder, CEO", 680, 503, 35), B("David Lin林大衛", 680, 591, 43), B("星雲互動有限公司", 677, 789, 37)]);
+  assert.equal(card.name, "林大衛");
+  assert.equal(card.nameEn, "David Lin");
+});
+
+test("單一字英文名在中文姓名右邊；全大寫 Logo 不當英文名", () => {
+  const { card } = parseCard([
+    B("SUNRISE", 563, 790, 38),
+    B("品牌行銷 總監", 272, 881, 46),
+    B("周曉晴", 266, 925, 68),
+    B("Amber", 439, 948, 50),
+  ]);
+  assert.equal(card.name, "周曉晴");
+  assert.equal(card.nameEn, "Amber");
+  assert.equal(card.title, "品牌行銷 總監");
+});
+
+test("姓氏在前的英文寫法、國際電話格式、ID 不當電話", () => {
+  const { card, others } = parseCard([
+    B("Managing Partner", 151, 452, 64),
+    B("LIN, ChiaHao | Jason", 144, 533, 85),
+    B("林家豪", 143, 593, 60),
+    B("(+886)912 345 678", 200, 783, 45),
+    B("(+86)139 1234 5678", 202, 830, 42),
+    B("00012345", 201, 915, 40),
+  ]);
+  assert.equal(card.nameEn, "LIN, ChiaHao Jason");
+  assert.deepEqual(card.phones.map((p) => p.type), ["mobile", "mobile"]);
+  assert.ok(others.includes("00012345"));
+});
+
+test("沒有寫公司全名時，用大字 Logo 當公司名稱", () => {
+  const { card } = parseCard([B("北辰", 562, 650, 83), B("冷凍", 559, 716, 85), B("經理", 272, 881, 46), B("吳家寧", 266, 925, 68)]);
+  assert.equal(card.company, "北辰冷凍");
+  assert.equal(card.name, "吳家寧");
+});
+
+test("職稱前面 4 個字不當姓名（高級展演業務）", () => {
+  const { card } = parseCard([B("高級展演業務", 135, 472, 47), B("許文華", 132, 379, 72)]);
+  assert.equal(card.name, "許文華");
+  assert.equal(card.title, "高級展演業務");
+});
