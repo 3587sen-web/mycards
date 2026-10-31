@@ -103,6 +103,12 @@ export async function getAllMeta() {
   return tx(["meta"], "readonly", (t) => req2p(t.objectStore("meta").getAll()));
 }
 
+// 所有名片照片（含縮圖）的總大小
+export async function imageBytes() {
+  const all = await tx(["images"], "readonly", (t) => req2p(t.objectStore("images").getAll()));
+  return all.reduce((n, r) => n + (r.blob?.size || 0), 0);
+}
+
 export async function getAllImageIds() {
   return tx(["images"], "readonly", (t) => req2p(t.objectStore("images").getAllKeys()));
 }

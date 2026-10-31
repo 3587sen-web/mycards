@@ -574,10 +574,30 @@ async function renderDetail(id) {
 }
 
 async function exportVcard(c) {
+  const v = await sheet("存到 iPhone 聯絡人", [
+    { label: "直接加入聯絡人", value: "open" },
+    { label: "存成檔案（備用方法）", value: "file" },
+  ]);
+  if (!v) return;
   const { cardToVcard } = await import("./backup.js");
   const text = await cardToVcard(c);
-  const file = new File([text], `${c.name || c.company || "card"}.vcf`, { type: "text/vcard" });
-  await shareOrDownload([file], "存到聯絡人：在分享選單中選「聯絡人」，或打開檔案後按「建立新聯絡人」。");
+  const name = `${(c.name || c.company || "card").replace(/[\\/:*?"<>|]/g, "")}.vcf`;
+  if (v === "open") {
+    // 方法 A：以下載方式開啟 .vcf，iPhone 會跳出聯絡人預覽（有「建立新聯絡人」）
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/vcard" }));
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+    toast("如果沒有跳出聯絡人畫面，請改用「存成檔案」", 3500);
+  } else {
+    // 方法 B：分享選單 → 儲存到檔案 → 到「檔案」App 點開 → 建立新聯絡人
+    const ok = await shareOrDownload([new File([text], name, { type: "text/vcard" })]);
+    if (ok) {
+      await sheet("接下來：打開「檔案」App，找到剛剛存的 " + name + "，點一下 →「建立新聯絡人」。", [{ label: "知道了", value: 1 }]);
+    }
+  }
 }
 
 /** 用 iPhone 的分享選單存檔（可選 iCloud 雲碟 / Google 雲端硬碟 / 我的 iPhone）；不支援時改為下載 */
@@ -681,12 +701,31 @@ async function renderEdit(id) {
   draw();
 }
 
+// 辨識引擎（模型、wasm、opencv）存在 service worker 的快取裡，用回應標頭的檔案大小加總
+async function engineCacheBytes() {
+  try {
+    const cache = await caches.open("mycards-big-v1");
+    let total = 0;
+    for (const req of await cache.keys()) {
+      const res = await cache.match(req);
+      const len = +res.headers.get("content-length");
+      total += len > 0 ? len : (await res.blob()).size;
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
 // ---------- 設定 ----------
 async function renderSettings() {
   const { getAiSettings } = await import("./ai.js");
   const ai = await getAiSettings();
   const lastBackup = await db.getMeta("lastBackupAt", 0);
   const est = await db.storageEstimate();
+  const photoBytes = await db.imageBytes();
+  const engineBytes = await engineCacheBytes();
+  const mb = (b) => (b / 1e6).toFixed(1) + " MB";
   const persisted = navigator.storage?.persisted ? await navigator.storage.persisted().catch(() => false) : false;
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   $app.innerHTML = `
@@ -697,7 +736,9 @@ async function renderSettings() {
       <div class="section">
         <div class="kv"><div class="k">上次備份</div><div class="v">${lastBackup ? new Date(lastBackup).toLocaleString("zh-TW", { hour12: false }) : "還沒備份過"}</div></div>
         <div class="kv"><div class="k">名片數</div><div class="v">${state.cards.length} 張</div></div>
-        <div class="kv"><div class="k">已用空間</div><div class="v">${est ? (est.usage / 1e6).toFixed(1) + " MB" : "—"}${persisted ? "（已設為永久保存）" : ""}</div></div>
+        <div class="kv"><div class="k">名片照片</div><div class="v">${mb(photoBytes)}<span class="muted">（會隨名片數增加）</span></div></div>
+        <div class="kv"><div class="k">辨識引擎</div><div class="v">${engineBytes ? mb(engineBytes) : "尚未下載"}<span class="muted">（固定大小，只下載一次）</span></div></div>
+        <div class="kv"><div class="k">合計</div><div class="v">${est ? mb(est.usage) : mb(photoBytes + engineBytes)}${persisted ? "（已設為永久保存）" : ""}</div></div>
       </div>
       <button class="btn" id="backup">備份全部名片</button>
       <p class="hint">會產生一個 .zip 檔（照片＋資料），接著在分享選單選「儲存到檔案」，可以存到 <b>iCloud 雲碟</b>、<b>Google 雲端硬碟</b>（需裝 Google Drive App）或 <b>我的 iPhone</b>。超過 300 張會分成多個檔案。</p>
