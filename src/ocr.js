@@ -7,7 +7,7 @@ let enginePromise = null;
 export function getEngine(onStatus = () => {}) {
   if (!enginePromise) {
     const base = new URL("./", document.baseURI);
-    onStatus("載入辨識引擎中（第一次約需下載 40 MB，建議用 Wi-Fi）…");
+    onStatus("載入辨識引擎中（第一次約需下載 46 MB，建議用 Wi-Fi）…");
     enginePromise = PaddleOCR.create({
       textDetectionModelName: "PP-OCRv5_mobile_det",
       textDetectionModelAsset: { url: new URL("models/PP-OCRv5_mobile_det.tar", base).href },

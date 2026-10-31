@@ -717,6 +717,19 @@ async function engineCacheBytes() {
   }
 }
 
+// 兩個模型檔都在快取裡 → 視為已下載
+async function isModelCached() {
+  try {
+    const base = new URL("./", document.baseURI);
+    for (const f of ["models/PP-OCRv5_mobile_det.tar", "models/PP-OCRv5_mobile_rec.tar", "ort/ort-wasm-simd-threaded.wasm"]) {
+      if (!(await caches.match(new URL(f, base).href))) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- 設定 ----------
 async function renderSettings() {
   const { getAiSettings } = await import("./ai.js");
@@ -725,6 +738,7 @@ async function renderSettings() {
   const est = await db.storageEstimate();
   const photoBytes = await db.imageBytes();
   const engineBytes = await engineCacheBytes();
+  const modelReady = await isModelCached();
   const mb = (b) => (b / 1e6).toFixed(1) + " MB";
   const persisted = navigator.storage?.persisted ? await navigator.storage.persisted().catch(() => false) : false;
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -770,7 +784,9 @@ async function renderSettings() {
       <div class="section">
         <div class="kv"><div class="k">引擎</div><div class="v">PaddleOCR PP-OCRv5（手機端執行、可離線）</div></div>
       </div>
-      <button class="btn secondary" id="preload">預先下載辨識模型（約 40 MB）</button>
+      ${modelReady
+        ? `<div class="status ok"><span>✓ 辨識模型已下載，沒有網路也能辨識。</span></div>`
+        : `<button class="btn secondary" id="preload">預先下載辨識模型（約 46 MB）</button>`}
       <div id="preloadStatus"></div>
 
       <p class="hint center mt">mycards v${esc(window.APP_VERSION || "dev")}<br>資料只存在這支 iPhone，不會上傳到任何伺服器。</p>
@@ -892,14 +908,15 @@ async function renderSettings() {
     e.currentTarget.disabled = false;
   });
 
-  $app.querySelector("#preload").addEventListener("click", async (e) => {
+  $app.querySelector("#preload")?.addEventListener("click", async (e) => {
     const el = $app.querySelector("#preloadStatus");
     e.currentTarget.disabled = true;
     const show = (t, cls = "") => { el.innerHTML = `<div class="status ${cls}">${cls ? "" : '<span class="spinner"></span>'}<span>${esc(t)}</span></div>`; };
     try {
       const { getEngine } = await import("./ocr.js");
       await getEngine((s) => show(s));
-      show("辨識模型已就緒，之後沒網路也能辨識。", "ok");
+      show("✓ 辨識模型已下載，沒有網路也能辨識。", "ok");
+      e.target.remove?.();
     } catch (err) {
       show("下載失敗：" + err.message, "err");
       e.currentTarget.disabled = false;
