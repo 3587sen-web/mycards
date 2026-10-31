@@ -3,6 +3,7 @@
 import * as db from "./db.js";
 import { parseCard, linesFromOcr, emptyCard, PHONE_TYPES } from "./parser.js";
 import { prepareImage } from "./image.js";
+import { findTemplate, applyTemplate, learnTemplate, FIELD_LABELS } from "./template.js";
 
 const $app = document.getElementById("app");
 const state = {
@@ -167,12 +168,24 @@ async function runOcr(d, side) {
       setStatus("沒有辨識到文字，可以旋轉照片後重新辨識，或直接手動輸入。", "err");
       return;
     }
-    const { card, others } = parseCard(lines);
+    const { card, others, notes } = parseCard(lines);
     // 先保存使用者在辨識期間已輸入的內容，再填入辨識結果
     const form = state.draft === d && $app.querySelector("#reviewForm");
     if (form) readForm(form, d.card);
     mergeInto(d, card, others, side === "front");
-    setStatus(`辨識完成（${lines.length} 行文字），請確認下面的欄位。`, "ok");
+    // 版型記憶：同公司的名片照之前修正過的位置自動填入
+    if (side === "front") {
+      d.template = null;
+      const found = findTemplate(await db.getMeta("templates", {}), d.card);
+      if (found) {
+        const before = { card: structuredClone(d.card), others: [...d.others] };
+        const r = applyTemplate(found, d.card, d.others, lines);
+        d.card = r.card;
+        d.others = r.others;
+        d.template = { label: found.tpl.label, count: found.tpl.count, filled: r.filled, before };
+      }
+    }
+    setStatus(`辨識完成（${lines.length} 行文字），請確認下面的欄位。${(notes || []).map((n) => "　" + n).join("")}`, "ok");
     if (state.draft === d) renderReview();
   } catch (e) {
     console.error(e);
@@ -374,6 +387,7 @@ async function renderReview() {
       ${d.front || d.source !== "manual" ? `<div class="photos">${photo(d.front, "front")}${d.back ? photo(d.back, "back") : `<button class="photo add-back" id="addBack">＋ 加入背面照片</button>`}</div>
       <div class="dots">左右滑動看正反面</div>` : ""}
       <div id="status"></div>
+      ${d.template ? `<div class="banner info">📐 已套用「${esc(d.template.label)}」的版型（從 ${d.template.count} 張名片學到）${d.template.filled.length ? "：" + esc(d.template.filled.map((f) => FIELD_LABELS[f] || f).join("、")) : ""}<button id="undoTpl">不要套用</button></div>` : ""}
       ${d.lines.length || d.backLines.length ? `<div class="btn-row">${canAi ? '<button class="btn secondary" id="aiBtn">✨ AI 整理</button>' : ""}</div>` : ""}
       <form id="reviewForm" data-draft="1" onsubmit="return false">${formHtml(d.card)}</form>
       ${d.others.length ? `<div class="section-h">沒有歸類的文字（點一下指定欄位）</div><div class="section"><div class="ocr-chips">${d.others.map((t, i) => `<button class="ocr-chip" data-other="${i}">${esc(t)}</button>`).join("")}</div></div>` : ""}
@@ -393,6 +407,13 @@ async function renderReview() {
     finishBatchOrExit(true);
   });
   $app.querySelector("#save").addEventListener("click", saveDraft);
+  $app.querySelector("#undoTpl")?.addEventListener("click", () => {
+    d.card = d.template.before.card;
+    d.others = d.template.before.others;
+    d.template = null;
+    toast("已取消套用版型");
+    renderReview();
+  });
   $app.querySelector("#skip")?.addEventListener("click", () => nextInBatch());
   $app.querySelector("#addBack")?.addEventListener("click", async () => {
     const v = await sheet("背面照片", [{ label: "📷 拍照", value: "camera" }, { label: "🖼️ 從相簿選", value: "album" }]);
@@ -471,6 +492,10 @@ async function saveDraft() {
   if (d.back) card.backImageId = await db.putImage(d.back.full);
   await db.putCard(card);
   state.cards.push(card);
+  // 版型記憶：用這張（你確認、修正過的）名片更新這間公司的版型
+  if (d.lines.length) {
+    try { await db.setMeta("templates", learnTemplate(await db.getMeta("templates", {}), card, d.lines)); } catch (e) { console.warn("版型學習失敗", e); }
+  }
   db.requestPersist();
   if (state.batch) {
     state.batch.saved++;
@@ -734,6 +759,7 @@ async function isModelCached() {
 async function renderSettings() {
   const { getAiSettings } = await import("./ai.js");
   const ai = await getAiSettings();
+  const templates = await db.getMeta("templates", {});
   const lastBackup = await db.getMeta("lastBackupAt", 0);
   const est = await db.storageEstimate();
   const photoBytes = await db.imageBytes();
@@ -770,6 +796,12 @@ async function renderSettings() {
         ${state.groups.map((g, i) => `<div class="field"><input data-gi="${i}" value="${esc(g)}"><span class="muted">${state.cards.filter((c) => c.group === g).length} 張</span><button class="x" data-gdel="${i}">⊖</button></div>`).join("")}
         <button class="add-line" id="addGroup">＋ 新增分組</button>
       </div>
+
+      <div class="section-h">版型記憶</div>
+      <div class="section">
+        ${Object.keys(templates).length ? Object.entries(templates).sort((a, b) => b[1].updatedAt - a[1].updatedAt).map(([id, t]) => `<div class="field"><div style="flex:1;min-width:0"><div>${esc(t.label)}</div><div class="muted">學了 ${t.count} 張・${esc([...t.keys.domains, t.keys.taxId].filter(Boolean).join("、") || "依公司名稱比對")}</div></div><button class="x" data-tdel="${esc(id)}" aria-label="刪除">⊖</button></div>`).join("") : `<div class="kv"><div class="v muted">還沒有。存過的名片會自動記住公司版型，同公司的下一張就會自動套用。</div></div>`}
+      </div>
+      <p class="hint">用 Email 網域、統編、網站或公司名稱判斷是不是同一間公司。套用不準的版型可以刪掉，下次存檔會重新學。</p>
 
       <div class="section-h">AI 整理（選用，Cloudflare Workers AI）</div>
       <div class="section">
@@ -883,6 +915,15 @@ async function renderSettings() {
     await db.setMeta("groups", state.groups);
     for (const c of state.cards.filter((x) => x.group === g)) { c.group = ""; await db.putCard(c); }
     if (state.groupFilter === g) state.groupFilter = "__all";
+    renderSettings();
+  }));
+
+  $app.querySelectorAll("[data-tdel]").forEach((b) => b.addEventListener("click", async () => {
+    const t = { ...templates };
+    const v = await sheet(`刪除「${t[b.dataset.tdel]?.label}」的版型？名片不會被刪。`, [{ label: "刪除版型", value: "del", danger: true }]);
+    if (v !== "del") return;
+    delete t[b.dataset.tdel];
+    await db.setMeta("templates", t);
     renderSettings();
   }));
 

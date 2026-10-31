@@ -20,6 +20,7 @@ export async function buildBackup(onProgress = () => {}) {
   const cards = await db.getAllCards();
   cards.sort((a, b) => a.createdAt - b.createdAt);
   const groups = await db.getMeta("groups", []);
+  const templates = await db.getMeta("templates", {});
   const parts = Math.max(1, Math.ceil(cards.length / CARDS_PER_ZIP));
   const name = `mycards-backup-${stamp()}`;
   const files = [];
@@ -29,7 +30,7 @@ export async function buildBackup(onProgress = () => {}) {
     const zip = new JSZip();
     zip.file("data.json", JSON.stringify({
       app: "mycards", format: BACKUP_FORMAT, exportedAt: new Date().toISOString(),
-      part: p + 1, parts, groups, cards: slice,
+      part: p + 1, parts, groups, templates, cards: slice,
     }, null, 1));
     const imgDir = zip.folder("images");
     for (const c of slice) {
@@ -60,6 +61,12 @@ export async function restoreBackup(file, onProgress = () => {}) {
   const groups = new Set(await db.getMeta("groups", []));
   (data.groups || []).forEach((g) => groups.add(g));
   await db.setMeta("groups", [...groups]);
+  // 版型記憶：同一間公司保留學得比較多的那份
+  if (data.templates) {
+    const cur = await db.getMeta("templates", {});
+    for (const [id, t] of Object.entries(data.templates)) if (!cur[id] || (t.count || 0) > (cur[id].count || 0)) cur[id] = t;
+    await db.setMeta("templates", cur);
+  }
   for (let i = 0; i < data.cards.length; i++) {
     const c = data.cards[i];
     const existing = await db.getCard(c.id);

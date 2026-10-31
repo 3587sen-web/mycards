@@ -1,3 +1,5 @@
+import { englishNameFromEmail, emailMatchesWord } from "./names-en.js";
+
 // 規則式名片欄位解析器
 // 輸入：OCR 讀出的每一行（文字＋在名片上的位置、大小）
 // 輸出：姓名、職稱、公司、電話……等欄位，以及沒被認領的「其他文字」
@@ -388,6 +390,24 @@ export function parseCard(rawLines) {
       scored[0].l.used = true;
     }
   }
+  // ---- 英文名不在中文名附近：用 Email 輔助 ----
+  const notes = [];
+  if (!card.nameEn && card.name && /[\u3400-\u9fff]/.test(card.name)) {
+    // (a) 名片上某個英文名字樣的字，剛好出現在 Email 帳號裡（Joy ↔ joy_ye@…）
+    const hit = lines.find((l) => !l.used && isEnglishNameShape(l.text) && !/^[A-Z]+$/.test(l.text) &&
+      card.emails.some((e) => emailMatchesWord(e, l.text.split(/[\s,]+/)[0])));
+    if (hit) {
+      card.nameEn = hit.text.replace(/\s+/g, " ").trim();
+      hit.used = true;
+    } else {
+      // (b) 名片上沒有，直接從 Email 推測；不像英文名（拼音、縮寫、職能信箱）就不填
+      for (const e of card.emails) {
+        const guess = englishNameFromEmail(e);
+        if (guess) { card.nameEn = guess; notes.push(`英文名「${guess}」是從 Email 推測的，請確認`); break; }
+      }
+    }
+  }
+
   // 沒有中文姓名、只有英文姓名的名片：英文名放進姓名欄
   if (!card.name && card.nameEn) { card.name = card.nameEn; card.nameEn = ""; }
 
@@ -417,7 +437,7 @@ export function parseCard(rawLines) {
   // 單獨一個字母或符號（例如 Email 標籤「E」、分隔線被讀成「」」）不列入
   const junk = (t) => /^[A-Za-z]$|^[\p{P}\p{S}\s]+$/u.test(t);
   const others = lines.filter((l) => (!l.used || l.keepAsOther) && l.text.length > 0 && !junk(l.text)).map((l) => l.text);
-  return { card, others };
+  return { card, others, notes };
 }
 
 // 把 OCR SDK 的結果（poly 四點座標）轉成 parseCard 需要的格式
