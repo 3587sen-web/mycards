@@ -734,6 +734,7 @@ async function isModelCached() {
 async function renderSettings() {
   const { getAiSettings } = await import("./ai.js");
   const ai = await getAiSettings();
+  const aiModels = await db.getMeta("aiModels", []);
   const lastBackup = await db.getMeta("lastBackupAt", 0);
   const est = await db.storageEstimate();
   const photoBytes = await db.imageBytes();
@@ -774,10 +775,12 @@ async function renderSettings() {
       <div class="section-h">AI 整理（選用，OpenCode）</div>
       <div class="section">
         <div class="field"><label>API 網址</label><input id="aiBase" value="${esc(ai.baseUrl)}" autocapitalize="off" autocorrect="off"></div>
-        <div class="field"><label>模型</label><input id="aiModel" list="aiModels" value="${esc(ai.model)}" placeholder="按下方「載入模型清單」" autocapitalize="off" autocorrect="off"><datalist id="aiModels"></datalist></div>
+        <div class="field"><label>模型</label><input id="aiModel" value="${esc(ai.model)}" placeholder="按「載入模型清單」或自行輸入" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+        ${aiModels.length ? `<div class="field"><label>從清單選</label><select id="aiModelSelect"><option value="">— ${aiModels.length} 個模型，點此選擇 —</option>${aiModels.map((m) => `<option ${m === ai.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>` : ""}
         <div class="field"><label>API 金鑰</label><input id="aiKey" type="password" value="${esc(ai.apiKey)}" placeholder="只存在這支手機" autocapitalize="off" autocorrect="off"></div>
       </div>
       <div class="btn-row"><button class="btn secondary" id="aiModelsBtn">載入模型清單</button><button class="btn secondary" id="aiTest">儲存並測試</button></div>
+      <div id="aiStatus"></div>
       <p class="hint">設定後，確認畫面會出現「✨ AI 整理」按鈕。只會傳送辨識出的文字，不傳照片。金鑰不會包含在備份檔裡。</p>
 
       <div class="section-h">辨識引擎</div>
@@ -888,40 +891,61 @@ async function renderSettings() {
 
   // AI
   const readAi = () => ({ baseUrl: $app.querySelector("#aiBase").value.trim(), model: $app.querySelector("#aiModel").value.trim(), apiKey: $app.querySelector("#aiKey").value.trim() });
+  const aiStatus = (t, cls = "") => {
+    $app.querySelector("#aiStatus").innerHTML = `<div class="status ${cls}">${cls ? "" : '<span class="spinner"></span>'}<span>${esc(t)}</span></div>`;
+  };
+  $app.querySelector("#aiModelSelect")?.addEventListener("change", (e) => {
+    if (e.target.value) $app.querySelector("#aiModel").value = e.target.value;
+  });
   $app.querySelector("#aiModelsBtn").addEventListener("click", async (e) => {
+    const btn = e.currentTarget; // await 之後 e.currentTarget 會變成 null，要先存起來
     const s = readAi();
-    if (!s.apiKey) return toast("請先填 API 金鑰");
-    e.currentTarget.disabled = true;
+    if (!s.apiKey) return aiStatus("請先填 API 金鑰", "err");
+    btn.disabled = true;
+    aiStatus("載入模型清單中…");
     try {
-      const { listModels } = await import("./ai.js");
+      const { listModels, saveAiSettings } = await import("./ai.js");
       const models = await listModels(s);
-      $app.querySelector("#aiModels").innerHTML = models.map((m) => `<option value="${esc(m)}">`).join("");
-      toast(`載入 ${models.length} 個模型，點「模型」欄位選擇`, 3000);
-    } catch (err) { toast(err.message, 5000); }
-    e.currentTarget.disabled = false;
+      await saveAiSettings(s);
+      await db.setMeta("aiModels", models);
+      await renderSettings();
+      aiStatus(`已載入 ${models.length} 個模型，請在「從清單選」挑一個，再按「儲存並測試」。`, "ok");
+    } catch (err) {
+      aiStatus("載入失敗：" + err.message, "err");
+      btn.disabled = false;
+    }
   });
   $app.querySelector("#aiTest").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
     const s = readAi();
-    const { saveAiSettings, testAi } = await import("./ai.js");
-    await saveAiSettings(s);
-    if (!s.apiKey || !s.model) return toast("已儲存（模型或金鑰未填，AI 整理不會啟用）");
-    e.currentTarget.disabled = true;
-    try { const r = await testAi(s); toast("連線成功：" + r.slice(0, 30), 3000); } catch (err) { toast(err.message, 5000); }
-    e.currentTarget.disabled = false;
+    btn.disabled = true;
+    try {
+      const { saveAiSettings, testAi, endpointFor } = await import("./ai.js");
+      await saveAiSettings(s);
+      if (!s.apiKey || !s.model) { aiStatus("已儲存，但模型或金鑰還沒填，AI 整理不會啟用。", "err"); return; }
+      aiStatus(`測試中（${s.model}，${{ chat: "chat/completions", responses: "responses", messages: "messages" }[endpointFor(s.model)]} 格式）…`);
+      const r = await testAi(s);
+      aiStatus(`連線成功，模型回覆：「${r.trim().slice(0, 40)}」。確認畫面已出現「✨ AI 整理」按鈕。`, "ok");
+    } catch (err) {
+      aiStatus("測試失敗：" + err.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   $app.querySelector("#preload")?.addEventListener("click", async (e) => {
     const el = $app.querySelector("#preloadStatus");
-    e.currentTarget.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     const show = (t, cls = "") => { el.innerHTML = `<div class="status ${cls}">${cls ? "" : '<span class="spinner"></span>'}<span>${esc(t)}</span></div>`; };
     try {
       const { getEngine } = await import("./ocr.js");
       await getEngine((s) => show(s));
       show("✓ 辨識模型已下載，沒有網路也能辨識。", "ok");
-      e.target.remove?.();
+      btn.remove();
     } catch (err) {
       show("下載失敗：" + err.message, "err");
-      e.currentTarget.disabled = false;
+      btn.disabled = false;
     }
   });
 }

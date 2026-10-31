@@ -33,12 +33,12 @@ function friendlyError(e, status) {
   return e.message || String(e);
 }
 
-async function call(path, body, s) {
+async function call(path, body, s, extraHeaders = {}) {
   let status = 0;
   try {
     const r = await fetch(s.baseUrl.replace(/\/+$/, "") + path, {
       method: body ? "POST" : "GET",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.apiKey}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.apiKey}`, ...extraHeaders },
       body: body ? JSON.stringify(body) : undefined,
     });
     status = r.status;
@@ -52,6 +52,37 @@ async function call(path, body, s) {
   }
 }
 
+// OpenCode Zen 依模型使用不同的 API 格式：
+//   gpt-*            → /responses（OpenAI Responses API）
+//   claude-* / qwen* → /messages（Anthropic Messages API）
+//   其他              → /chat/completions（OpenAI 相容）
+export function endpointFor(model) {
+  const m = model.toLowerCase().replace(/^opencode\//, "");
+  if (/^gpt-/.test(m)) return "responses";
+  if (/^(claude|qwen)/.test(m)) return "messages";
+  return "chat";
+}
+
+async function chat(s, system, user, maxTokens = 1200) {
+  const model = s.model.replace(/^opencode\//, "");
+  const kind = endpointFor(model);
+  if (kind === "responses") {
+    const j = await call("/responses", { model, instructions: system, input: user, max_output_tokens: Math.max(maxTokens, 16) }, s);
+    if (j.output_text) return j.output_text;
+    return (j.output || []).flatMap((o) => o.content || []).map((c) => c.text || "").join("");
+  }
+  if (kind === "messages") {
+    const j = await call("/messages", { model, system, max_tokens: maxTokens, messages: [{ role: "user", content: user }] }, s,
+      { "x-api-key": s.apiKey, "anthropic-version": "2023-06-01" });
+    return (j.content || []).map((c) => c.text || "").join("");
+  }
+  const j = await call("/chat/completions", {
+    model, temperature: 0, max_tokens: maxTokens,
+    messages: [{ role: "system", content: system }, { role: "user", content: user }],
+  }, s);
+  return j.choices?.[0]?.message?.content || "";
+}
+
 export async function listModels(s) {
   const j = await call("/models", null, s);
   return (j.data || []).map((m) => m.id).sort();
@@ -61,15 +92,7 @@ export async function listModels(s) {
 export async function aiParse(lines) {
   const s = await getAiSettings();
   if (!s.apiKey || !s.model) throw new Error("尚未設定 OpenCode（設定頁 → AI 整理）");
-  const j = await call("/chat/completions", {
-    model: s.model,
-    temperature: 0,
-    messages: [
-      { role: "system", content: SYSTEM },
-      { role: "user", content: lines.join("\n") },
-    ],
-  }, s);
-  const text = j.choices?.[0]?.message?.content || "";
+  const text = await chat(s, SYSTEM, lines.join("\n"));
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error("AI 回傳的內容不是 JSON：" + text.slice(0, 120));
   const o = JSON.parse(m[0]);
@@ -89,8 +112,6 @@ export async function aiParse(lines) {
 }
 
 export async function testAi(s) {
-  const j = await call("/chat/completions", {
-    model: s.model, max_tokens: 5, messages: [{ role: "user", content: "回覆 OK" }],
-  }, s);
-  return j.choices?.[0]?.message?.content || "(無內容)";
+  const r = await chat(s, "你是測試助手。", "只回覆 OK 兩個字", 20);
+  return r || "(沒有內容)";
 }
