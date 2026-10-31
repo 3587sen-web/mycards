@@ -374,7 +374,7 @@ async function renderReview() {
       ${d.front || d.source !== "manual" ? `<div class="photos">${photo(d.front, "front")}${d.back ? photo(d.back, "back") : `<button class="photo add-back" id="addBack">＋ 加入背面照片</button>`}</div>
       <div class="dots">左右滑動看正反面</div>` : ""}
       <div id="status"></div>
-      ${d.lines.length || d.backLines.length ? `<div class="btn-row">${canAi ? '<button class="btn secondary" id="aiBtn">✨ AI 整理（OpenCode）</button>' : ""}</div>` : ""}
+      ${d.lines.length || d.backLines.length ? `<div class="btn-row">${canAi ? '<button class="btn secondary" id="aiBtn">✨ AI 整理</button>' : ""}</div>` : ""}
       <form id="reviewForm" data-draft="1" onsubmit="return false">${formHtml(d.card)}</form>
       ${d.others.length ? `<div class="section-h">沒有歸類的文字（點一下指定欄位）</div><div class="section"><div class="ocr-chips">${d.others.map((t, i) => `<button class="ocr-chip" data-other="${i}">${esc(t)}</button>`).join("")}</div></div>` : ""}
       ${d.lines.length ? `<div class="section-h">辨識到的全部文字（點一下指定欄位）</div><div class="section"><div class="ocr-chips">${[...d.lines, ...d.backLines].map((l, i) => `<button class="ocr-chip" data-line="${i}">${esc(l.text)}</button>`).join("")}</div></div>` : ""}
@@ -734,7 +734,6 @@ async function isModelCached() {
 async function renderSettings() {
   const { getAiSettings } = await import("./ai.js");
   const ai = await getAiSettings();
-  const aiModels = await db.getMeta("aiModels", []);
   const lastBackup = await db.getMeta("lastBackupAt", 0);
   const est = await db.storageEstimate();
   const photoBytes = await db.imageBytes();
@@ -772,16 +771,14 @@ async function renderSettings() {
         <button class="add-line" id="addGroup">＋ 新增分組</button>
       </div>
 
-      <div class="section-h">AI 整理（選用，OpenCode）</div>
+      <div class="section-h">AI 整理（選用，Cloudflare Workers AI）</div>
       <div class="section">
-        <div class="field"><label>API 網址</label><input id="aiBase" value="${esc(ai.baseUrl)}" autocapitalize="off" autocorrect="off"></div>
-        <div class="field"><label>模型</label><input id="aiModel" value="${esc(ai.model)}" placeholder="按「載入模型清單」或自行輸入" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-        ${aiModels.length ? `<div class="field"><label>從清單選</label><select id="aiModelSelect"><option value="">— ${aiModels.length} 個模型，點此選擇 —</option>${aiModels.map((m) => `<option ${m === ai.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>` : ""}
-        <div class="field"><label>API 金鑰</label><input id="aiKey" type="password" value="${esc(ai.apiKey)}" placeholder="只存在這支手機" autocapitalize="off" autocorrect="off"></div>
+        <div class="field"><label>Worker 網址</label><input id="aiUrl" value="${esc(ai.workerUrl)}" placeholder="https://mycards-ai.xxx.workers.dev" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url"></div>
+        <div class="field"><label>通行碼</label><input id="aiKey" type="password" value="${esc(ai.appKey)}" placeholder="和 Worker 的 APP_KEY 相同" autocapitalize="off" autocorrect="off"></div>
       </div>
-      <div class="btn-row"><button class="btn secondary" id="aiModelsBtn">載入模型清單</button><button class="btn secondary" id="aiTest">儲存並測試</button></div>
+      <button class="btn secondary" id="aiTest">儲存並測試</button>
       <div id="aiStatus"></div>
-      <p class="hint">設定後，確認畫面會出現「✨ AI 整理」按鈕。只會傳送辨識出的文字，不傳照片。金鑰不會包含在備份檔裡。</p>
+      <p class="hint">設定後，確認畫面會出現「✨ AI 整理」按鈕。只傳送辨識出的文字，不傳照片。通行碼不會包含在備份檔裡。</p>
 
       <div class="section-h">辨識引擎</div>
       <div class="section">
@@ -890,42 +887,22 @@ async function renderSettings() {
   }));
 
   // AI
-  const readAi = () => ({ baseUrl: $app.querySelector("#aiBase").value.trim(), model: $app.querySelector("#aiModel").value.trim(), apiKey: $app.querySelector("#aiKey").value.trim() });
+  const readAi = () => ({ workerUrl: $app.querySelector("#aiUrl").value.trim(), appKey: $app.querySelector("#aiKey").value.trim() });
   const aiStatus = (t, cls = "") => {
     $app.querySelector("#aiStatus").innerHTML = `<div class="status ${cls}">${cls ? "" : '<span class="spinner"></span>'}<span>${esc(t)}</span></div>`;
   };
-  $app.querySelector("#aiModelSelect")?.addEventListener("change", (e) => {
-    if (e.target.value) $app.querySelector("#aiModel").value = e.target.value;
-  });
-  $app.querySelector("#aiModelsBtn").addEventListener("click", async (e) => {
+  $app.querySelector("#aiTest").addEventListener("click", async (e) => {
     const btn = e.currentTarget; // await 之後 e.currentTarget 會變成 null，要先存起來
     const s = readAi();
-    if (!s.apiKey) return aiStatus("請先填 API 金鑰", "err");
-    btn.disabled = true;
-    aiStatus("載入模型清單中…");
-    try {
-      const { listModels, saveAiSettings } = await import("./ai.js");
-      const models = await listModels(s);
-      await saveAiSettings(s);
-      await db.setMeta("aiModels", models);
-      await renderSettings();
-      aiStatus(`已載入 ${models.length} 個模型，請在「從清單選」挑一個，再按「儲存並測試」。`, "ok");
-    } catch (err) {
-      aiStatus("載入失敗：" + err.message, "err");
-      btn.disabled = false;
-    }
-  });
-  $app.querySelector("#aiTest").addEventListener("click", async (e) => {
-    const btn = e.currentTarget;
-    const s = readAi();
     btn.disabled = true;
     try {
-      const { saveAiSettings, testAi, endpointFor } = await import("./ai.js");
+      const { saveAiSettings, testAi } = await import("./ai.js");
       await saveAiSettings(s);
-      if (!s.apiKey || !s.model) { aiStatus("已儲存，但模型或金鑰還沒填，AI 整理不會啟用。", "err"); return; }
-      aiStatus(`測試中（${s.model}，${{ chat: "chat/completions", responses: "responses", messages: "messages" }[endpointFor(s.model)]} 格式）…`);
+      if (!s.workerUrl || !s.appKey) { aiStatus("已儲存，但 Worker 網址或通行碼還沒填，AI 整理不會啟用。", "err"); return; }
+      if (!/^https:\/\//.test(s.workerUrl)) { aiStatus("Worker 網址要以 https:// 開頭。", "err"); return; }
+      aiStatus("測試中…");
       const r = await testAi(s);
-      aiStatus(`連線成功，模型回覆：「${r.trim().slice(0, 40)}」。確認畫面已出現「✨ AI 整理」按鈕。`, "ok");
+      aiStatus(`連線成功：${r}。確認畫面已出現「✨ AI 整理」按鈕。`, "ok");
     } catch (err) {
       aiStatus("測試失敗：" + err.message, "err");
     } finally {

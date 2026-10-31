@@ -33,3 +33,14 @@ npm run build   # 輸出到 docs/（GitHub Pages 從 main 分支 /docs 發佈）
 | `src/sw.js` | 離線快取 |
 
 模型來源：PP-OCRv5 mobile（PaddlePaddle，Apache-2.0），由 npm 套件 `pdfmarkdown-ppocrv5-models`、`@rustors/model-ppocrv5-mobile` 取得，建置時包成 SDK 所需的 tar。
+
+## AI 整理（選用）：Cloudflare Worker
+
+`worker/worker.js` 是 AI 整理用的 Cloudflare Worker（Workers AI，模型 `@cf/google/gemma-4-26b-a4b-it`）。
+
+1. Cloudflare 後台建立 Worker（Hello World 範本），貼上 `worker/worker.js` 後部署
+2. Bindings 加入 **Workers AI**，變數名稱 `AI`
+3. Variables and Secrets 加入 Secret：`APP_KEY` = 自訂通行碼
+4. 名片夾「設定 → AI 整理」填入 Worker 網址和通行碼
+
+Worker 只接受 `https://3587sen-web.github.io` 發出的請求，不儲存任何內容。
