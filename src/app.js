@@ -786,7 +786,9 @@ async function renderSettings() {
       </div>
       ${modelReady
         ? `<div class="status ok"><span>✓ 辨識模型已下載，沒有網路也能辨識。</span></div>`
-        : `<button class="btn secondary" id="preload">預先下載辨識模型（約 46 MB）</button>`}
+        : isIOS() && !isStandalone()
+          ? `<div class="banner warn">請從主畫面的「名片夾」圖示開啟後再下載模型，避免在 Safari 和主畫面版各存一份（各約 46 MB）。</div>`
+          : `<button class="btn secondary" id="preload">預先下載辨識模型（約 46 MB）</button>`}
       <div id="preloadStatus"></div>
 
       <p class="hint center mt">mycards v${esc(window.APP_VERSION || "dev")}<br>資料只存在這支 iPhone，不會上傳到任何伺服器。</p>
@@ -943,7 +945,37 @@ async function route() {
 window.addEventListener("hashchange", render);
 
 // ---------- 啟動 ----------
+// iPhone 上用 Safari（不是主畫面圖示）打開時，先顯示「加入主畫面」引導
+// 原因：主畫面版和 Safari 的儲存空間是分開的，在 Safari 存的名片和模型，主畫面版看不到
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+function showInstallGuide() {
+  return new Promise((resolve) => {
+    $app.innerHTML = `
+      <div class="wrap" style="padding-top:calc(env(safe-area-inset-top) + 40px)">
+        <div class="center"><img src="icons/icon-192.png" width="88" height="88" style="border-radius:20px" alt=""></div>
+        <h1 class="center" style="font-size:24px;margin:16px 0 4px">把名片夾加到主畫面</h1>
+        <p class="center muted">請從主畫面的圖示開啟，名片才會存在同一個地方</p>
+        <div class="section" style="padding:6px 0">
+          <div class="kv"><div class="k" style="width:22px;font-weight:600;color:var(--accent)">1</div><div class="v">按下 Safari 下方的 <b>分享</b> 按鈕 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;color:var(--accent)"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v9h14v-9"/></svg>（方框加向上箭頭）</div></div>
+          <div class="kv"><div class="k" style="width:22px;font-weight:600;color:var(--accent)">2</div><div class="v">往下滑，選 <b>加入主畫面</b></div></div>
+          <div class="kv"><div class="k" style="width:22px;font-weight:600;color:var(--accent)">3</div><div class="v">按右上角 <b>加入</b>，之後從主畫面的「名片夾」圖示開啟</div></div>
+        </div>
+        <div class="banner warn">⚠️ 主畫面版和 Safari 的資料是分開的。在 Safari 裡存的名片和下載的辨識模型，主畫面版看不到。</div>
+        <button class="btn secondary mt" id="stayBrowser">我只是看看，繼續在 Safari 使用</button>
+      </div>`;
+    $app.querySelector("#stayBrowser").addEventListener("click", () => {
+      try { sessionStorage.setItem("stayBrowser", "1"); } catch { /* 無痕模式 */ }
+      resolve();
+    });
+  });
+}
+
 (async () => {
+  let stay = false;
+  try { stay = sessionStorage.getItem("stayBrowser") === "1"; } catch { /* ignore */ }
+  if (isIOS() && !isStandalone() && !stay) await showInstallGuide();
   await reload();
   render();
   if ("serviceWorker" in navigator && location.protocol === "https:") {
