@@ -1,0 +1,18 @@
+{
+  "name": "mycards",
+  "version": "0.1.0",
+  "private": true,
+  "description": "個人名片夾 PWA：拍照、手機端 OCR、資料只存在自己的 iPhone",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@paddleocr/paddleocr-js": "0.4.2",
+    "@rustors/model-ppocrv5-mobile": "0.3.2",
+    "esbuild": "^0.25.0",
+    "jszip": "^3.10.1",
+    "pdfmarkdown-ppocrv5-models": "1.0.0"
+  }
+}

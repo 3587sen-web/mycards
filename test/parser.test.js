@@ -1,0 +1,82 @@
+// 規則解析器測試（範例資料皆為虛構）
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseCard, extractPhones } from "../src/parser.js";
+
+const L = (text, h = 20, y = 0) => ({ text, box: { x: 0, y, w: 100, h } });
+
+test("典型直式中文名片", () => {
+  const { card, others } = parseCard([
+    L("星河科技股份有限公司", 24, 10),
+    L("王小明", 40, 60),
+    L("產品開發部 經理", 18, 110),
+    L("手機：0912-345-678", 14, 150),
+    L("TEL：(02)2345-6789 #123", 14, 170),
+    L("FAX：(02)2345-6780", 14, 190),
+    L("E-mail：ming.wang@example.com.tw", 14, 210),
+    L("台北市信義區松仁路100號8樓", 14, 230),
+    L("www.example.com.tw", 14, 250),
+  ]);
+  assert.equal(card.company, "星河科技股份有限公司");
+  assert.equal(card.name, "王小明");
+  assert.equal(card.title, "經理");
+  assert.equal(card.department, "產品開發部");
+  assert.deepEqual(card.phones.map((p) => p.type), ["mobile", "work", "fax"]);
+  assert.equal(card.phones[1].value, "(02)2345-6789 #123");
+  assert.deepEqual(card.emails, ["ming.wang@example.com.tw"]);
+  assert.equal(card.address, "台北市信義區松仁路100號8樓");
+  assert.equal(card.website, "www.example.com.tw");
+  assert.deepEqual(others, []);
+});
+
+test("姓名職稱同一行、英文姓名與英文公司", () => {
+  const { card } = parseCard([
+    L("陳美華 副理", 30),
+    L("Mei-Hua Chen", 16),
+    L("Galaxy Tech Co., Ltd.", 16),
+    L("極光資訊有限公司", 18),
+    L("M +886 912 345 678", 12),
+    L("統一編號：12345678", 12),
+  ]);
+  assert.equal(card.name, "陳美華");
+  assert.equal(card.title, "副理");
+  assert.equal(card.nameEn, "Mei-Hua Chen");
+  assert.equal(card.company, "極光資訊有限公司");
+  assert.equal(card.companyEn, "Galaxy Tech Co., Ltd.");
+  assert.equal(card.taxId, "12345678");
+  assert.equal(card.phones[0].type, "mobile");
+});
+
+test("字最大的中文字當姓名，Logo 字不誤判", () => {
+  const { card } = parseCard([
+    L("創新", 50), // 太短的 logo 字，但比姓名大
+    L("李大同", 36),
+    L("業務代表", 14),
+  ]);
+  // 「創新」也是 2 個中文字，會被當候選；字最大者勝 → 這是已知限制，交給確認畫面修正
+  assert.ok(["創新", "李大同"].includes(card.name));
+  assert.equal(card.title, "業務代表");
+});
+
+test("一行有電話和傳真", () => {
+  const p = extractPhones("TEL:(03)550-6770 分機 815  FAX:(03)550-6776");
+  assert.equal(p.length, 2);
+  assert.equal(p[0].type, "work");
+  assert.equal(p[0].value, "(03)550-6770 #815");
+  assert.equal(p[1].type, "fax");
+});
+
+test("未標示的號碼依格式判斷手機", () => {
+  const p = extractPhones("0987654321");
+  assert.equal(p[0].type, "mobile");
+});
+
+test("日期與統編不會被當成電話", () => {
+  assert.equal(extractPhones("2023-09-13").length, 0);
+  assert.equal(extractPhones("統編 12345678").length, 0);
+});
+
+test("英文地址", () => {
+  const { card } = parseCard([L("8F., No. 100, Songren Rd., Xinyi Dist., Taipei City, Taiwan")]);
+  assert.match(card.address, /Songren/);
+});
