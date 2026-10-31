@@ -25,6 +25,8 @@ const TITLE_WORDS = [
 const TITLE_EN = /\b(CEO|CTO|CFO|COO|CIO|CMO|VP|AVP|SVP|EVP|President|Vice President|Director|Manager|Engineer|Specialist|Consultant|Assistant|Supervisor|Representative|Executive|Officer|Founder|Co-Founder|Partner|Chairman|Designer|Analyst|Sales|Lead|Head of|Associate|Coordinator|Editor|Reporter|Professor|Researcher)\b/i;
 
 const COMPANY_RE = /(股份有限公司|有限公司|有限責任|公司|集團|企業社|工作室|事務所|銀行|協會|學會|基金會|大學|學院|醫院|診所|研究院|研究所|中心$|商行|實業|科技$)/;
+// 以這些字結尾的一定是公司名，就算裡面有「顧問」「業務」等職稱字
+const COMPANY_END = /(股份有限公司|有限公司|公司|事務所|工作室|銀行|基金會|協會|學會|大學|學院|醫院|診所|研究院|集團|企業社|商行)$/;
 const COMPANY_EN = /\b(Co\.?,?\s*Ltd\.?|Co\.|Ltd\.?|Inc\.?|Corp\.?|Corporation|Company|Limited|LLC|GmbH|Group|Technology|Technologies|Tech|Bank|University|Studio)\b/i;
 const DEPT_RE = /(部|處|課|室|組|中心|事業群|事業部|事業處|本部|分公司|辦事處)$/;
 const DEPT_EN = /\b(Department|Dept\.?|Division|Div\.?)\b/i;
@@ -94,6 +96,14 @@ function normalizeLine(l) {
 
 const CJK = /[㐀-鿿]/;
 const CJK_ALL = /^[㐀-鿿·．]+$/;
+
+// 台灣常見姓氏（含複姓）：名字第一個字是常見姓氏 → 加分；可排除「創新」「資誠」這類 Logo / 標語字
+const COMPOUND_SURNAMES = ["歐陽", "司馬", "諸葛", "上官", "司徒", "張簡", "范姜", "周黃", "徐辜", "陳李", "江謝", "簡李", "東方", "皇甫", "公孫", "長孫", "慕容"];
+const SURNAMES = new Set(("陳林黃張李王吳劉蔡楊許鄭謝洪郭邱曾廖賴徐周葉蘇莊呂江何蕭羅高潘簡朱鍾游彭詹胡施沈余盧梁趙顏柯翁魏孫戴范方宋鄧杜傅侯曹薛丁卓阮馬董温温唐藍蔣石古紀姚連馮歐程湯黃田康姜白汪鄒尤巫鐘黎涂龔嚴韓袁金童陸夏柳凃邵錢伍倪溫于譚駱熊任甘秦顧毛章史官萬俞雷粘饒張闕凌崔尹孔辛武辜陶段龍韋葛池孟褚殷麥賀賈莫文管關向包丘梅華利裴樊房全佘左花易鄔鄞喬苗卜閻成岳常耿聶牛時湛符尚龐冉祝盛翟艾鄺鄢戚荘錡").split(""));
+function hasSurname(t) {
+  const s = t.replace(/\s+/g, "");
+  return COMPOUND_SURNAMES.some((c) => s.startsWith(c)) || SURNAMES.has(s[0]);
+}
 
 function isLikelyName(t) {
   const s = t.replace(/\s+/g, "");
@@ -174,7 +184,7 @@ export function parseCard(rawLines) {
   for (const l of lines) {
     if (l.used) continue;
     const t = l.text;
-    if (CJK.test(t) && COMPANY_RE.test(t) && t.length >= 4 && !findTitle(t)) {
+    if (CJK.test(t) && t.length >= 4 && (COMPANY_END.test(t) || (COMPANY_RE.test(t) && !findTitle(t)))) {
       if (!card.company) card.company = t;
       l.used = true;
     } else if (!CJK.test(t) && COMPANY_EN.test(t) && t.length >= 4) {
@@ -184,51 +194,116 @@ export function parseCard(rawLines) {
   }
   for (const l of lines) {
     if (l.used) continue;
-    const t = l.text;
-    // 「林祺祥 副理」「林祺祥副理」：姓名＋職稱在同一行
-    const title = findTitle(t);
-    if (title) {
-      const rest = t.replace(title, " ").replace(/\s+/g, " ").trim();
-      const parts = rest.split(" ").filter(Boolean);
-      const namePart = parts.find((p) => isLikelyName(p));
-      if (namePart && !card.name && parts.length === 1) {
-        card.name = namePart;
-        card.title = card.title ? card.title : title;
-        l.used = true;
-        continue;
+    // 先依分隔符號切開：「創意總監／品牌部」「經理 | 業務部」
+    const parts = l.text.split(/\s*[\/／|｜・•·、]\s*|\s+/).map((x) => x.trim()).filter(Boolean);
+    const isDept = (p) => CJK.test(p) && DEPT_RE.test(p) && p.length >= 2 && p.length <= 16;
+    const titleOf = (p) => {
+      const w = findTitle(p);
+      // 「業務管理處」以部門字結尾 → 是部門，不是職稱
+      if (!w || (isDept(p) && !p.endsWith(w))) return null;
+      return w;
+    };
+    let claimed = false;
+    const rest = [];
+    for (const p of parts) {
+      if (isDept(p) && !titleOf(p)) {
+        card.department = card.department ? card.department + " " + p : p;
+        claimed = true;
+      } else if (titleOf(p)) {
+        const w = titleOf(p);
+        // 「林祺祥副理」：職稱前面黏著姓名
+        const before = p.slice(0, p.indexOf(w));
+        if (before && isLikelyName(before) && hasSurname(before) && !card.name) {
+          card.name = before;
+          card.title = card.title ? card.title + " " + p.slice(before.length) : p.slice(before.length);
+        } else {
+          card.title = card.title ? card.title + " " + p : p;
+        }
+        claimed = true;
+      } else if (!CJK.test(p) && DEPT_EN.test(l.text)) {
+        rest.push(p);
+      } else {
+        rest.push(p);
       }
-      // 部門＋職稱：「產品開發部 經理」
-      const deptPart = parts.find((p) => DEPT_RE.test(p));
-      if (deptPart && !card.department) card.department = deptPart;
-      if (!card.title) card.title = deptPart ? title : t.replace(deptPart || "", "").trim() || title;
-      else card.title += " " + t;
-      l.used = true;
+    }
+    if (claimed) {
+      // 同一行剩下的部分：像姓名的當姓名，其餘放回「其他文字」
+      for (const p of rest) {
+        if (!card.name && isLikelyName(p) && hasSurname(p)) card.name = p;
+        else l.leftover = (l.leftover ? l.leftover + " " : "") + p;
+      }
+      l.role = "title";
+      l.used = !l.leftover;
+      if (l.leftover) { l.text = l.leftover; l.used = true; l.keepAsOther = true; }
       continue;
     }
-    if (CJK.test(t) && DEPT_RE.test(t) && t.length <= 16 && !isLikelyName(t)) {
-      if (!card.department) card.department = t;
-      l.used = true;
-      continue;
-    }
+    const t = l.text;
     if (!CJK.test(t) && DEPT_EN.test(t)) {
       if (!card.department) card.department = t;
-      l.used = true;
+      l.used = true; l.role = "title";
       continue;
     }
     if (!CJK.test(t) && TITLE_EN.test(t) && t.length <= 60) {
       if (!card.title) card.title = t;
+      l.used = true; l.role = "title";
+    }
+  }
+
+  // ---- 3. 姓名：多個線索一起打分數 ----
+  // 線索：字的大小、第一個字是不是常見姓氏、緊鄰職稱/部門那一行、不是公司名的一部分（Logo）
+  if (!card.name) {
+    const maxH = Math.max(1, ...lines.map((l) => l.box.h));
+    const titleLines = lines.filter((l) => l.role === "title");
+    const companyText = (card.company || "") + " " + (card.companyEn || "");
+    const scored = lines
+      .filter((l) => !l.used && isLikelyName(l.text))
+      .map((l) => {
+        const t = l.text.replace(/\s+/g, "");
+        let score = (l.box.h / maxH) * 3; // 字越大分數越高（最多 3 分）
+        if (hasSurname(t)) score += 3;
+        if (companyText.includes(t)) score -= 5; // 公司名的一部分 → 多半是 Logo
+        if (t.length === 4 && !COMPOUND_SURNAMES.some((c) => t.startsWith(c))) score -= 1; // 四字多半不是人名
+        // 職稱/部門就在正下方或右邊 → 加分
+        for (const tl of titleLines) {
+          const dy = tl.box.y - (l.box.y + l.box.h);
+          const xOverlap = Math.min(l.box.x + l.box.w, tl.box.x + tl.box.w) - Math.max(l.box.x, tl.box.x);
+          const below = dy > -l.box.h * 0.3 && dy < l.box.h * 1.5 && (xOverlap > 0 || Math.abs(tl.box.x - l.box.x) < l.box.h);
+          const right = Math.abs(tl.box.y - l.box.y) < l.box.h && tl.box.x > l.box.x;
+          if (below || right) { score += 2; break; }
+        }
+        return { l, t, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    if (scored.length && scored[0].score > 1) {
+      card.name = scored[0].t;
+      scored[0].l.used = true;
+      scored[0].l.role = "name";
+    }
+  }
+
+  // 姓名正下方、沒被認領的短中文 → 多半是部門或職務（例如「創新創業服務」）
+  const nameLine = lines.find((l) => l.role === "name");
+  if (nameLine) {
+    for (const l of lines) {
+      if (l.used || !CJK.test(l.text) || /\d/.test(l.text) || l.text.length > 14) continue;
+      const dy = l.box.y - (nameLine.box.y + nameLine.box.h);
+      if (dy > -nameLine.box.h * 0.3 && dy < nameLine.box.h * 1.5 && Math.abs(l.box.x - nameLine.box.x) < nameLine.box.h) {
+        if (!card.department) card.department = l.text;
+        else if (!card.title) card.title = l.text;
+        else continue;
+        l.used = true;
+      }
+    }
+  }
+
+  // 郵遞區號（3~6 位數字單獨一行）→ 加到地址前面
+  for (const l of lines) {
+    if (!l.used && /^\d{3,6}$/.test(l.text) && card.address && !/^\d/.test(card.address)) {
+      card.address = l.text + card.address;
       l.used = true;
     }
   }
 
-  // ---- 3. 姓名：字最大的 2~4 個中文字 ----
-  const nameCandidates = lines.filter((l) => !l.used && isLikelyName(l.text));
-  if (!card.name && nameCandidates.length) {
-    nameCandidates.sort((a, b) => b.box.h - a.box.h);
-    const n = nameCandidates[0];
-    card.name = n.text.replace(/\s+/g, "");
-    n.used = true;
-  }
   const enCandidates = lines.filter((l) => !l.used && isLikelyEnglishName(l.text));
   if (enCandidates.length) {
     enCandidates.sort((a, b) => b.box.h - a.box.h);
@@ -241,7 +316,9 @@ export function parseCard(rawLines) {
     card.companyEn = "";
   }
 
-  const others = lines.filter((l) => !l.used && l.text.length > 0).map((l) => l.text);
+  // 單獨一個字母或符號（例如 Email 標籤「E」、分隔線被讀成「」」）不列入
+  const junk = (t) => /^[A-Za-z]$|^[\p{P}\p{S}\s]+$/u.test(t);
+  const others = lines.filter((l) => (!l.used || l.keepAsOther) && l.text.length > 0 && !junk(l.text)).map((l) => l.text);
   return { card, others };
 }
 

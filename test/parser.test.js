@@ -80,3 +80,53 @@ test("英文地址", () => {
   const { card } = parseCard([L("8F., No. 100, Songren Rd., Xinyi Dist., Taipei City, Taiwan")]);
   assert.match(card.address, /Songren/);
 });
+
+// ---- 實際失敗案例改寫成虛構資料的回歸測試 ----
+const B = (text, x, y, h) => ({ text, box: { x, y, w: text.length * h, h } });
+
+test("Logo 字比名字大、公司名含「顧問」、名字右下＋下一行單位", () => {
+  const { card, others } = parseCard([
+    B("星辰", 320, 460, 87),
+    B("星辰企業管理顧問公司", 610, 476, 44),
+    B("110台北市基隆路一段1號2樓", 610, 508, 49),
+    B("電話:+886 (2)2700 0000 ext.123", 610, 542, 50),
+    B("統編：12345678", 607, 607, 45),
+    B("abc", 160, 860, 116),
+    B("何美君", 590, 903, 72),
+    B("創新創業服務", 591, 966, 46),
+  ]);
+  assert.equal(card.name, "何美君");
+  assert.equal(card.company, "星辰企業管理顧問公司");
+  assert.equal(card.department, "創新創業服務");
+  assert.equal(card.taxId, "12345678");
+  assert.ok(others.includes("星辰"));
+});
+
+test("部門名稱含職稱字（業務管理處）、公司 Logo 字比名字大", () => {
+  const { card } = parseCard([
+    B("朱大同", 170, 540, 59),
+    B("副總經理", 168, 606, 43),
+    B("業務管理處", 168, 646, 42),
+    B("宇宙通訊股份有限公司", 570, 666, 56),
+    B("100012", 570, 726, 37),
+    B("台北市中正區信義路一段1號", 570, 761, 52),
+    B("宇宙通訊", 138, 939, 67),
+  ]);
+  assert.equal(card.name, "朱大同");
+  assert.equal(card.title, "副總經理");
+  assert.equal(card.department, "業務管理處");
+  assert.equal(card.address, "100012台北市中正區信義路一段1號");
+});
+
+test("姓名、部門、職稱讀成同一行", () => {
+  const { card } = parseCard([B("李承恩 業務部 經理", 100, 100, 30), B("某某有限公司", 100, 40, 20)]);
+  assert.equal(card.name, "李承恩");
+  assert.equal(card.department, "業務部");
+  assert.equal(card.title, "經理");
+});
+
+test("分隔符號切開職稱與部門", () => {
+  const { card } = parseCard([B("林柏宇", 500, 260, 59), B("創意總監／品牌部", 500, 320, 24)]);
+  assert.equal(card.title, "創意總監");
+  assert.equal(card.department, "品牌部");
+});
