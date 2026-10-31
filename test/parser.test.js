@@ -188,3 +188,9 @@ test("職稱前面 4 個字不當姓名（高級展演業務）", () => {
   assert.equal(card.name, "許文華");
   assert.equal(card.title, "高級展演業務");
 });
+
+test("部門＋職稱黏在一起沒有空格", () => {
+  const { card } = parseCard([B("產品開發部經理", 260, 195, 27), B("王小明", 50, 170, 63)]);
+  assert.equal(card.department, "產品開發部");
+  assert.equal(card.title, "經理");
+});

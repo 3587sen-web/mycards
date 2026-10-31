@@ -252,7 +252,12 @@ export function parseCard(rawLines) {
         const before = p.slice(0, p.indexOf(w));
         const nameOk = before && isLikelyName(before) && hasSurname(before) &&
           (before.length <= 3 || COMPOUND_SURNAMES.some((c) => before.startsWith(c)));
-        if (nameOk && !card.name) {
+        if (before && !nameOk && DEPT_RE.test(before) && before.length >= 2) {
+          // 「產品開發部經理」：部門＋職稱黏在一起
+          card.department = card.department ? card.department + " " + before : before;
+          const t2 = p.slice(before.length);
+          card.title = card.title ? card.title + " " + t2 : t2;
+        } else if (nameOk && !card.name) {
           card.name = before;
           card.title = card.title ? card.title + " " + p.slice(before.length) : p.slice(before.length);
         } else {
