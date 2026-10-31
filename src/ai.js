@@ -47,7 +47,10 @@ export async function aiParse(lines) {
   const j = await post(s, "/parse", { lines });
   const text = (j.content || "").replace(/<think>[\s\S]*?<\/think>/g, "");
   const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("AI 回傳的內容不是 JSON：" + text.slice(0, 120));
+  if (!m) {
+    if (!text.trim()) throw new Error("AI 回傳空白。" + (j.debug ? "診斷：" + JSON.stringify(j.debug).slice(0, 200) : "請確認 Worker 程式碼已更新到最新版。"));
+    throw new Error("AI 回傳的內容不是 JSON：" + text.slice(0, 120));
+  }
   const o = JSON.parse(m[0]);
   const str = (v) => (typeof v === "string" ? v.trim() : "");
   return {

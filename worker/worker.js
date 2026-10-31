@@ -36,7 +36,9 @@ function textOf(r) {
   if (typeof r === "string") return r;
   if (typeof r.response === "string") return r.response;
   if (r.response && typeof r.response === "object") return JSON.stringify(r.response);
-  if (r.choices?.[0]?.message?.content) return r.choices[0].message.content;
+  const c = r.choices?.[0]?.message?.content;
+  if (typeof c === "string" && c) return c;
+  if (Array.isArray(c)) return c.map((x) => x.text || "").join("");
   if (r.output_text) return r.output_text;
   return "";
 }
@@ -53,7 +55,7 @@ export default {
     const path = new URL(request.url).pathname;
     try {
       if (path === "/ping") {
-        const r = await env.AI.run(MODEL, { messages: [{ role: "user", content: "只回覆 OK" }], max_tokens: 20 });
+        const r = await env.AI.run(MODEL, { messages: [{ role: "user", content: "只回覆 OK" }], max_tokens: 20, chat_template_kwargs: { enable_thinking: false } });
         return json({ ok: true, model: MODEL, reply: textOf(r).slice(0, 40) }, 200, origin);
       }
       if (path === "/parse") {
@@ -63,10 +65,15 @@ export default {
         if (!text.trim()) return json({ error: "沒有文字" }, 400, origin);
         const r = await env.AI.run(MODEL, {
           messages: [{ role: "system", content: SYSTEM }, { role: "user", content: text }],
-          max_tokens: 1024,
+          max_tokens: 1500,
           temperature: 0,
+          // 關掉「思考模式」：整理名片不需要，開著會把字數額度用在思考上，導致回傳空白
+          chat_template_kwargs: { enable_thinking: false },
         });
-        return json({ model: MODEL, content: textOf(r) }, 200, origin);
+        const content = textOf(r);
+        // 回傳空白時附上診斷資訊（只有回應結構，不含名片內容）
+        const debug = content ? undefined : { keys: Object.keys(r || {}), finish: r?.choices?.[0]?.finish_reason, usage: r?.usage };
+        return json({ model: MODEL, content, debug }, 200, origin);
       }
       return json({ error: "找不到這個路徑" }, 404, origin);
     } catch (e) {

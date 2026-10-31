@@ -1,8 +1,8 @@
 // Service worker：讓 App 離線也能開、辨識模型只下載一次
-const VERSION = "d3cba60f2e";
+const VERSION = "edc8953833";
 const SHELL_CACHE = "mycards-shell-" + VERSION;
 const BIG_CACHE = "mycards-big-v1"; // 模型、wasm 等大檔，跨版本保留，避免每次更新都重新下載 40 MB
-const SHELL = ["./","assets/ai-22D4AEP4.js","assets/app.js","assets/backup-RUEC56EN.js","assets/chunk-3EAUIFKP.js","assets/chunk-FOKWMY3J.js","assets/chunk-ZWRDP37E.js","assets/ort.wasm.bundle.min-4BBX6W6S.js","assets/styles.css","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","manifest.webmanifest"];
+const SHELL = ["./","assets/ai-SL34OSCB.js","assets/app.js","assets/backup-5F75TZ5R.js","assets/chunk-FOKWMY3J.js","assets/chunk-OKDDZH7W.js","assets/chunk-ZWRDP37E.js","assets/ort.wasm.bundle.min-4BBX6W6S.js","assets/styles.css","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","manifest.webmanifest"];
 const BIG = ["assets/ocr-Q7SW2Q6V.js","models/PP-OCRv5_mobile_det.tar","models/PP-OCRv5_mobile_rec.tar","ort/ort-wasm-simd-threaded.mjs","ort/ort-wasm-simd-threaded.wasm"];
 
 self.addEventListener("install", (e) => {

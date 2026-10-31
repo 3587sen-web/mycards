@@ -372,7 +372,18 @@ export function parseCard(rawLines) {
         return { l, t, score };
       })
       .sort((a, b) => b.score - a.score);
-    if (scored.length && scored[0].score >= 2.5) {
+    // 名片上沒有中文姓名時（純英文名片），門檻放寬，並優先選職稱旁邊的英文字
+    const titleLines = lines.filter((l) => l.role === "title");
+    if (!nameL) {
+      for (const sc of scored) {
+        for (const tl of titleLines) {
+          const gap = Math.min(Math.abs(sc.l.box.y - (tl.box.y + tl.box.h)), Math.abs(tl.box.y - (sc.l.box.y + sc.l.box.h)));
+          if (gap < Math.max(sc.l.box.h, tl.box.h) * 1.5) { sc.score += 2; break; }
+        }
+      }
+      scored.sort((a, b) => b.score - a.score);
+    }
+    if (scored.length && scored[0].score >= (nameL ? 2.5 : 1.5)) {
       card.nameEn = scored[0].t.replace(/\s*[|丨]\s*/g, " ").replace(/\s+/g, " ").trim();
       scored[0].l.used = true;
     }

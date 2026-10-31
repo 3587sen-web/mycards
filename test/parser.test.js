@@ -194,3 +194,9 @@ test("部門＋職稱黏在一起沒有空格", () => {
   assert.equal(card.department, "產品開發部");
   assert.equal(card.title, "經理");
 });
+
+test("純英文名片：英文名放進姓名欄", () => {
+  const { card } = parseCard([B("AKAS", 340, 460, 30), B("CEO", 490, 600, 22), B("Chiaochun Su", 385, 630, 28), B("+886-922-000-000", 342, 776, 14), B("abc@example.com", 342, 802, 14)]);
+  assert.equal(card.name, "Chiaochun Su");
+  assert.equal(card.title, "CEO");
+});
