@@ -1,5 +1,5 @@
 // Service worker：讓 App 離線也能開、辨識模型只下載一次
-const VERSION = "f01eb97e6e";
+const VERSION = "89360858ef";
 const SHELL_CACHE = "mycards-shell-" + VERSION;
 const BIG_CACHE = "mycards-big-v1"; // 模型、wasm 等大檔，跨版本保留，避免每次更新都重新下載 40 MB
 const SHELL = ["./","assets/ai-WDMPCISD.js","assets/app.js","assets/backup-JOPK63V3.js","assets/chunk-4HDCAJ3O.js","assets/chunk-FOKWMY3J.js","assets/chunk-ZWRDP37E.js","assets/ort.wasm.bundle.min-4BBX6W6S.js","assets/s2t-B246XSHW.js","assets/styles.css","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","manifest.webmanifest"];

@@ -2,7 +2,7 @@
 // 畫面：名片夾列表 / 新增＋確認 / 名片詳情 / 編輯 / 設定
 import * as db from "./db.js";
 import { parseCard, linesFromOcr, emptyCard, PHONE_TYPES } from "./parser.js";
-import { prepareImage } from "./image.js";
+import { prepareImage, cardCropRect, cropToCard, finalImage, compressBlob } from "./image.js";
 import { findTemplate, applyTemplate, learnTemplate, FIELD_LABELS } from "./template.js";
 
 const $app = document.getElementById("app");
@@ -170,6 +170,13 @@ async function runOcr(d, side) {
     const { linesToTraditional } = await import("./s2t.js");
     const lines = await linesToTraditional(linesFromOcr(items));
     if (side === "front") d.lines = lines; else d.backLines = lines;
+    // 自動裁切：依文字範圍裁掉背景（檔案更小、名片看得更清楚）
+    try {
+      const rect = cardCropRect(lines, img.width, img.height);
+      img.cropped = rect ? await cropToCard(img, rect) : null;
+      img.cropOn = !!img.cropped;
+      if (img.cropped) { URL.revokeObjectURL(img.url); img.url = URL.createObjectURL(img.cropped.full); }
+    } catch (e) { console.warn("自動裁切失敗", e); img.cropped = null; }
     if (!lines.length) {
       setStatus("沒有辨識到文字，可以旋轉照片後重新辨識，或直接手動輸入。", "err");
       return;
@@ -386,7 +393,7 @@ async function renderReview() {
   const canAi = await aiReady();
   const b = state.batch;
   const photo = (img, side) => img ? `<div class="photo"><img src="${img.url}" data-view="${side}" alt=""><span class="tag">${side === "front" ? "正面" : "背面"}</span>
-      <div class="tools"><button data-rotate="${side}">↻ 旋轉</button><button data-reocr="${side}">重新辨識</button>${side === "back" ? '<button data-rmback="1">移除</button>' : ""}</div></div>` : "";
+      <div class="tools">${img.cropped ? `<button data-crop="${side}">${img.cropOn ? "看原圖" : "裁切"}</button>` : ""}<button data-rotate="${side}">↻ 旋轉</button><button data-reocr="${side}">重新辨識</button>${side === "back" ? '<button data-rmback="1">移除</button>' : ""}</div></div>` : "";
   $app.innerHTML = `
     <header class="topbar"><button class="tb-btn" id="cancel">取消</button><h1>${b ? `批次 ${b.index + 1} / ${b.files.length}` : "確認名片"}</h1><button class="tb-btn right" id="save"><b>存檔</b></button></header>
     <div class="wrap">
@@ -443,6 +450,14 @@ async function renderReview() {
     d[side] = r;
     renderReview();
   }));
+  $app.querySelectorAll("[data-crop]").forEach((btn) => btn.addEventListener("click", () => {
+    readForm(form, d.card);
+    const img = d[btn.dataset.crop];
+    img.cropOn = !img.cropOn;
+    URL.revokeObjectURL(img.url);
+    img.url = URL.createObjectURL(img.cropOn ? img.cropped.full : img.full);
+    renderReview();
+  }));
   $app.querySelectorAll("[data-reocr]").forEach((btn) => btn.addEventListener("click", () => { readForm(form, d.card); runOcr(d, btn.dataset.reocr); }));
   $app.querySelectorAll("[data-view]").forEach((img) => img.addEventListener("click", () => viewImage(img.src)));
   const assign = async (text) => {
@@ -492,10 +507,12 @@ async function saveDraft({ navigate = true } = {}) {
   }
   const card = { id: db.uid(), ...c, source: d.source, ocrText: [...d.lines, ...d.backLines].map((l) => l.text).join("\n") };
   if (d.front) {
-    card.frontImageId = await db.putImage(d.front.full);
-    card.thumbId = await db.putImage(d.front.thumb);
+    const f = await finalImage(d.front);
+    card.frontImageId = await db.putImage(f.full);
+    card.thumbId = await db.putImage(f.thumb);
   }
-  if (d.back) card.backImageId = await db.putImage(d.back.full);
+  if (d.back) card.backImageId = await db.putImage((await finalImage(d.back)).full);
+  card.imgV2 = true; // 已是壓縮後的照片
   await db.putCard(card);
   state.cards.push(card);
   // 版型記憶：用這張（你確認、修正過的）名片更新這間公司的版型
@@ -716,7 +733,7 @@ async function renderEdit(id) {
       const [f] = await pickFiles({ capture: v === "camera" });
       if (!f) return;
       readForm(form, c);
-      const img = await prepareImage(f);
+      const img = await finalImage(await prepareImage(f));
       if (side === "front") {
         await db.deleteImage(c.frontImageId); await db.deleteImage(c.thumbId);
         c.frontImageId = await db.putImage(img.full);
@@ -808,6 +825,9 @@ async function renderSettings() {
         <div class="kv"><div class="k">辨識引擎</div><div class="v">${engineBytes ? mb(engineBytes) : "尚未下載"}<span class="muted">（固定大小，只下載一次）</span></div></div>
         <div class="kv"><div class="k">合計</div><div class="v">${est ? mb(est.usage) : mb(photoBytes + engineBytes)}${persisted ? "（已設為永久保存）" : ""}</div></div>
       </div>
+      ${state.cards.some((c) => !c.imgV2 && (c.frontImageId || c.backImageId)) ? `<button class="btn secondary" id="compress">壓縮舊名片照片（${state.cards.filter((c) => !c.imgV2 && (c.frontImageId || c.backImageId)).length} 張）</button>
+      <p class="hint">把舊照片縮成 1200px、畫質 80%，預估省下約一半空間。照片會被取代、無法復原，<b>請先備份</b>。新拍的名片已經會自動裁切和壓縮。</p>` : ""}
+      <div id="compressStatus"></div>
       <button class="btn" id="backup">備份全部名片</button>
       <p class="hint">會產生一個 .zip 檔（照片＋資料），接著在分享選單選「儲存到檔案」，可以存到 <b>iCloud 雲碟</b>、<b>Google 雲端硬碟</b>（需裝 Google Drive App）或 <b>我的 iPhone</b>。超過 300 張會分成多個檔案。</p>
       <button class="btn secondary" id="restore">從備份還原</button>
@@ -859,6 +879,44 @@ async function renderSettings() {
     ${tabbar("settings")}`;
   bindTabbar();
 
+  $app.querySelector("#compress")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const todo = state.cards.filter((c) => !c.imgV2 && (c.frontImageId || c.backImageId));
+    const days = lastBackup ? Math.floor((Date.now() - lastBackup) / 86400000) : null;
+    const warn = days === null ? "你還沒備份過！" : days > 0 ? `上次備份是 ${days} 天前。` : "";
+    const v = await sheet(`${warn}壓縮 ${todo.length} 張名片的照片？照片會被取代、無法復原。過程中請保持畫面開著，中途關掉也沒關係，下次會從沒壓縮的繼續。`, [
+      { label: "開始壓縮", value: "go", danger: !!warn },
+      ...(warn ? [{ label: "先去備份", value: "backup" }] : []),
+    ]);
+    if (v === "backup") { $app.querySelector("#backup").scrollIntoView({ behavior: "smooth" }); return; }
+    if (v !== "go") return;
+    btn.disabled = true;
+    const el = $app.querySelector("#compressStatus");
+    const show = (t, cls = "") => { el.innerHTML = `<div class="status ${cls}">${cls ? "" : '<span class="spinner"></span>'}<span>${esc(t)}</span></div>`; };
+    let before = 0, after = 0, n = 0;
+    const sz = (b) => (b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB");
+    try {
+      for (const c of todo) {
+        for (const id of [c.frontImageId, c.backImageId]) {
+          if (!id) continue;
+          const blob = await db.getImage(id);
+          if (!blob) continue;
+          const out = await compressBlob(blob);
+          before += blob.size; after += out.size;
+          if (out !== blob) await db.putImage(out, id);
+        }
+        c.imgV2 = true;
+        await db.putCardRaw(c); // 不改動修改時間
+        n++;
+        if (n % 5 === 0 || n === todo.length) show(`壓縮中… ${n} / ${todo.length}（已省下 ${sz(before - after)}）`);
+      }
+      show(`完成！${n} 張名片的照片從 ${sz(before)} 壓到 ${sz(after)}，省下 ${sz(before - after)}。`, "ok");
+      setTimeout(renderSettings, 4000);
+    } catch (err) {
+      show(`壓縮到第 ${n} 張時失敗：${err.message}。已壓縮的不受影響，可以再按一次繼續。`, "err");
+      btn.disabled = false;
+    }
+  });
   $app.querySelector("#backup").addEventListener("click", async (e) => {
     if (!state.cards.length) return toast("還沒有名片可以備份");
     const btn = e.currentTarget;
