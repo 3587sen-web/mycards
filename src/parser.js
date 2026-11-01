@@ -55,6 +55,20 @@ export function emptyCard() {
   };
 }
 
+// 統一編號檢查碼（財政部規則）：8 位數字，權重 1,2,1,2,1,2,4,1，各乘積的位數相加後
+// 總和能被 5 整除即有效（2023 年起由 10 改為 5）；第 7 碼是 7 時，總和 +1 也算有效
+export function isValidTaxId(s) {
+  const d = String(s);
+  if (!/^\d{8}$/.test(d) || /^000/.test(d)) return false; // 000 開頭多半是會員編號、ID
+  const w = [1, 2, 1, 2, 1, 2, 4, 1];
+  let sum = 0;
+  for (let i = 0; i < 8; i++) {
+    const p = Number(d[i]) * w[i];
+    sum += Math.floor(p / 10) + (p % 10);
+  }
+  return sum % 5 === 0 || (d[6] === "7" && (sum + 1) % 5 === 0);
+}
+
 function cleanPhone(raw) {
   return raw.replace(/\s+/g, " ").replace(/\s*-\s*/g, "-").replace(/[.]/g, "-").trim();
 }
@@ -84,6 +98,8 @@ export function extractPhones(text) {
     const tail = before.slice(-14);
     let type = null;
     for (const l of LABELS) if (l.re.test(tail)) { type = l.type; break; }
+    // 沒標示的 8 位數字、中間沒有 - 或空白、符合統編檢查碼 → 多半是統一編號，不是電話
+    if (!type && /^\d{8}$/.test(num.trim()) && isValidTaxId(num.trim())) continue;
     if (!type) type = guessPhoneType(num);
     let value = cleanPhone(num);
     if (m[2]) value += " #" + m[2].replace(/\D/g, "");
@@ -165,6 +181,14 @@ export function parseCard(rawLines) {
     if (tax) {
       card.taxId = tax[2];
       t = t.replace(TAXID_RE, " ");
+    }
+    // 沒有標示「統編」、但整段就是一組符合檢查碼的 8 位數字
+    if (!card.taxId) {
+      const bare = t.match(/(?:^|[^\d\-])(\d{8})(?![\d\-])/);
+      if (bare && isValidTaxId(bare[1]) && !/(電話|TEL|手機|Mobile|傳真|FAX|分機|ext)/i.test(t.slice(0, bare.index + 1))) {
+        card.taxId = bare[1];
+        t = t.replace(bare[1], " ");
+      }
     }
     // 網址
     const url = t.match(URL_RE);

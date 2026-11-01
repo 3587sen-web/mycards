@@ -200,3 +200,21 @@ test("純英文名片：英文名放進姓名欄", () => {
   assert.equal(card.name, "Chiaochun Su");
   assert.equal(card.title, "CEO");
 });
+
+test("沒有標示的統編：符合檢查碼的 8 位數字不當電話", async () => {
+  const { isValidTaxId } = await import("../src/parser.js");
+  assert.ok(isValidTaxId("22859168"));
+  assert.ok(isValidTaxId("25136736"));
+  assert.ok(isValidTaxId("55737320"));
+  assert.ok(isValidTaxId("96979933"));
+  assert.ok(isValidTaxId("22446744"));
+  const { card } = parseCard([L("某某科技股份有限公司"), L("22859168"), L("TEL 02-2553-2001")]);
+  assert.equal(card.taxId, "22859168");
+  assert.deepEqual(card.phones.map((p) => p.value), ["02-2553-2001"]);
+});
+
+test("有標示電話的 8 位數字仍是電話", () => {
+  const { card } = parseCard([L("電話：25532001")]);
+  assert.equal(card.phones.length, 1);
+  assert.equal(card.taxId, "");
+});

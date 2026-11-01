@@ -52,6 +52,12 @@ export async function aiParse(lines) {
     throw new Error("AI 回傳的內容不是 JSON：" + text.slice(0, 120));
   }
   const o = JSON.parse(m[0]);
+  // AI 偶爾也會回簡體字，統一轉繁體
+  const { toTraditional } = await import("./s2t.js");
+  for (const k of Object.keys(o)) {
+    if (typeof o[k] === "string") o[k] = await toTraditional(o[k]);
+    else if (Array.isArray(o[k])) o[k] = await Promise.all(o[k].map(async (x) => (typeof x === "string" ? toTraditional(x) : x)));
+  }
   const str = (v) => (typeof v === "string" ? v.trim() : "");
   return {
     card: {

@@ -100,8 +100,8 @@ export function learnTemplate(templates, card, lines) {
   }
   const constants = { ...old.constants };
   for (const f of CONST_FIELDS) if (card[f]) constants[f] = card[f];
-  const sharedPhones = (card.phones || []).filter((p) => p.type === "work" || p.type === "fax");
-  if (sharedPhones.length) constants.phones = sharedPhones;
+  // 電話不記：公司電話常常是每個人不同的直撥或分機，記下來會重複加到別人的名片上
+  delete constants.phones;
   next[id] = {
     label: card.company || keys.domains[0] || id,
     keys: {
@@ -149,12 +149,10 @@ export function applyTemplate(found, card, others, lines) {
   for (const f of CONST_FIELDS) {
     const v = tpl.constants[f];
     if (!v) continue;
-    // 用網域或統編確認是同公司時，以版型（你修正過的）為準；否則只補空白欄位
-    if (!c[f] || (strong && norm(c[f]) !== norm(v))) { c[f] = v; filled.push(f); }
-  }
-  const digits = (s) => String(s).replace(/\D/g, "");
-  for (const p of tpl.constants.phones || []) {
-    if (!c.phones.some((x) => digits(x.value) === digits(p.value))) { c.phones.push({ ...p }); filled.push("phones"); }
+    // 只補「這張沒辨識到」的欄位，不覆蓋這張名片自己的內容
+    // 例外：公司名稱在確認是同公司（網域或統編相同）且 OCR 讀得有點錯時，用你修正過的寫法
+    const fixCompany = (f === "company" || f === "companyEn") && strong && c[f] && norm(c[f]) !== norm(v) && similarity(norm(c[f]), norm(v)) >= 0.6;
+    if (!c[f] || fixCompany) { c[f] = v; filled.push(f); }
   }
   return { card: c, others: rest, filled: [...new Set(filled)] };
 }

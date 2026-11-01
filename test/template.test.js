@@ -68,3 +68,17 @@ test("從 Email 推測的英文名不會把 Email 那行記成英文名位置", 
   const r = applyTemplate(findTemplate(t, p2.card), p2.card, p2.others, l2);
   assert.ok(!r.card.nameEn.includes("@"));
 });
+
+test("套用版型不會把第一張的電話加到別人身上，也不覆蓋這張自己的地址", () => {
+  const l1 = cardOf("林曉雯", "專案經理", "amy@shuguang.example");
+  const c1 = { ...parseCard(l1).card, name: "林曉雯", phones: [{ type: "work", value: "02-2700-0000 #101" }, { type: "mobile", value: "0912-000-111" }] };
+  const t = learnTemplate({}, c1, l1);
+  assert.equal(Object.values(t)[0].constants.phones, undefined);
+  const l2 = cardOf("鄭宇", "設計師", "yu@shuguang.example");
+  const p2 = parseCard(l2);
+  const before = p2.card.phones.length;
+  p2.card.address = "台中市西屯區分公司地址1號";
+  const r = applyTemplate(findTemplate(t, p2.card), p2.card, p2.others, l2);
+  assert.equal(r.card.phones.length, before);
+  assert.equal(r.card.address, "台中市西屯區分公司地址1號");
+});

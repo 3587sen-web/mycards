@@ -13,6 +13,7 @@
     "@rustors/model-ppocrv5-mobile": "0.3.2",
     "esbuild": "^0.25.0",
     "jszip": "^3.10.1",
+    "opencc-js": "^1.4.2",
     "pdfmarkdown-ppocrv5-models": "1.0.0"
   }
 }

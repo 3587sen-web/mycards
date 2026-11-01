@@ -167,7 +167,8 @@ async function runOcr(d, side) {
     setStatus("準備辨識…");
     const { recognize } = await import("./ocr.js");
     const items = await recognize(img.full, (s) => setStatus(s));
-    const lines = linesFromOcr(items);
+    const { linesToTraditional } = await import("./s2t.js");
+    const lines = await linesToTraditional(linesFromOcr(items));
     if (side === "front") d.lines = lines; else d.backLines = lines;
     if (!lines.length) {
       setStatus("沒有辨識到文字，可以旋轉照片後重新辨識，或直接手動輸入。", "err");
@@ -825,10 +826,13 @@ async function renderSettings() {
       </div>
 
       <div class="section-h">版型記憶</div>
-      <div class="section">
-        ${Object.keys(templates).length ? Object.entries(templates).sort((a, b) => b[1].updatedAt - a[1].updatedAt).map(([id, t]) => `<div class="field"><div style="flex:1;min-width:0"><div>${esc(t.label)}</div><div class="muted">學了 ${t.count} 張・${esc([...t.keys.domains, t.keys.taxId].filter(Boolean).join("、") || "依公司名稱比對")}</div></div><button class="x" data-tdel="${esc(id)}" aria-label="刪除">⊖</button></div>`).join("") : `<div class="kv"><div class="v muted">還沒有。存過的名片會自動記住公司版型，同公司的下一張就會自動套用。</div></div>`}
-      </div>
-      <p class="hint">用 Email 網域、統編、網站或公司名稱判斷是不是同一間公司。套用不準的版型可以刪掉，下次存檔會重新學。</p>
+      ${Object.keys(templates).length ? `
+      <details class="section">
+        <summary class="field" style="cursor:pointer"><span style="flex:1">已記住 ${Object.keys(templates).length} 間公司的版型</span><span class="muted">展開</span></summary>
+        ${Object.entries(templates).sort((a, b) => b[1].updatedAt - a[1].updatedAt).map(([id, t]) => `<div class="field"><div style="flex:1;min-width:0"><div>${esc(t.label)}</div><div class="muted">學了 ${t.count} 張・${esc([...t.keys.domains, t.keys.taxId].filter(Boolean).join("、") || "依公司名稱比對")}</div></div><button class="x" data-tdel="${esc(id)}" aria-label="刪除">⊖</button></div>`).join("")}
+      </details>
+      <button class="btn danger" id="clearTpl">一鍵清除全部版型</button>` : `<div class="section"><div class="kv"><div class="v muted">還沒有。存過的名片會自動記住公司版型，同公司的下一張就會自動套用。</div></div></div>`}
+      <p class="hint">用 Email 網域、統編、網站或公司名稱判斷是不是同一間公司。只會補上這張沒辨識到的欄位，不會覆蓋或重複加入。掃完一批後可以一鍵清除，不影響已存的名片。</p>
 
       <div class="section-h">AI 整理（選用，Cloudflare Workers AI）</div>
       <div class="section">
@@ -945,6 +949,13 @@ async function renderSettings() {
     renderSettings();
   }));
 
+  $app.querySelector("#clearTpl")?.addEventListener("click", async () => {
+    const v = await sheet(`清除全部 ${Object.keys(templates).length} 個版型？已存的名片不受影響，之後存檔會重新學習。`, [{ label: "全部清除", value: "del", danger: true }]);
+    if (v !== "del") return;
+    await db.setMeta("templates", {});
+    toast("已清除全部版型");
+    renderSettings();
+  });
   $app.querySelectorAll("[data-tdel]").forEach((b) => b.addEventListener("click", async () => {
     const t = { ...templates };
     const v = await sheet(`刪除「${t[b.dataset.tdel]?.label}」的版型？名片不會被刪。`, [{ label: "刪除版型", value: "del", danger: true }]);
